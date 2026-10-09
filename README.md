@@ -112,7 +112,8 @@ Sia `SKILL.md` sia gli script in `scripts/` sono pensati per essere adattati: pu
 - **Macchina target**: Ubuntu/Debian
 - **Ambiente agente**: Hermes Agent (terminale)
 - **Modello**: DeepSeek V4 Flash 0731 (1m token di contesto)
-- **Contesto**: minimo 75k token, raccomandato 100k token
+- **Contesto**: minimo 90k token, raccomandato 130k token
+- **Tempo stimato**: 15-20 minuti
 
 ## Versionamento
 
@@ -124,7 +125,11 @@ Se aggiorni il progetto, aggiorna questi riferimenti di conseguenza.
 ## Disclaimer
 
 Per quanto questa skill sia stata progettata per essere il più deterministica possibile, coinvolge comunque un agente IA per narrazione, conferme e sintesi del report. I risultati possono variare in base alle capacità del modello usato, e non è da escludersi un comportamento inatteso. Verifica sempre i risultati contro i log grezzi prima di trarre conclusioni operative.
+Quando utilizzato su Hermes, di default il sistema chiederà ogni volta l'autorizzazione all'immissione di comandi; questo a prescindere dal tool. Per evitare ciò, digitare alla prima richiesta "2. allow for this session"
 
 ## Licenza
 
 MIT — vedi [LICENSE](./LICENSE).
+
+# Nota etica sull'utilizzo dell'IA
+Questo progetto è stato ideato, strutturato e supervisionato dal sottoscritto. Il codice e i contenuti sono stati sviluppati in stretta collaborazione con Claude (Anthropic), che ha agito come assistente di programmazione per la scrittura e l'ottimizzazione del materiale, sotto la mia costante guida e validazione.
