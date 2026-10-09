@@ -1,6 +1,7 @@
 # Agentic Audit — skill `/audit` per Hermes Agent
 
 Skill custom per [Hermes Agent](https://github.com/NousResearch) che esegue un audit di sicurezza automatizzato su una macchina remota raggiunta via SSH, combinando script bash deterministici con un agente IA per la narrazione, le conferme e la sintesi finale.
+L’agente monitora l’esecuzione e, se il processo si blocca, riporta in chat il motivo con l’output letterale ricevuto. È possibile discutere con l’agente per approfondire o localizzare la causa del problema, senza perdere il progresso dell’audit — ma l’agente non intraprende mai un’azione di propria iniziativa: ogni comando resta soggetto a conferma esplicita dell’utente.
 
 ## A cosa serve
 
@@ -110,7 +111,7 @@ Sia `SKILL.md` sia gli script in `scripts/` sono pensati per essere adattati: pu
 
 - **Macchina target**: Ubuntu/Debian
 - **Ambiente agente**: Hermes Agent (terminale)
-- **Modello**: DeepSeek V4 Flash 0731
+- **Modello**: DeepSeek V4 Flash 0731 (1m token di contesto)
 - **Contesto**: minimo 75k token, raccomandato 100k token
 
 ## Versionamento
