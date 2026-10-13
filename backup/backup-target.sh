@@ -1,5 +1,5 @@
 #!/bin/bash
-# backup-target.sh <ssh-target> <identity-file|-> <repo-path> <mode> [extra-path ...]
+# backup-target.sh <ssh-target> <identity-file|-> <ssh-port|-> <repo-path> <mode> [extra-path ...]
 #
 # Backup di sicurezza PRE-AUDIT della macchina target, da eseguire SU HERMES
 # (non sulla VM: a differenza dei tre script in scripts/, questo gira in
@@ -24,6 +24,8 @@
 #                     ~/.hermes/config.yaml)
 #   <identity-file>   chiave SSH da usare, oppure "-" per lasciare che sia
 #                     ~/.ssh/config a deciderlo
+#   <ssh-port>        porta SSH della VM, oppure "-" per il default di ssh
+#                     (22). Stesso valore di ssh_port in config.yaml.
 #   <repo-path>       percorso del repository restic, locale a Hermes
 #   <mode>            default | full
 #   [extra-path ...]  solo in mode=default: path aggiuntivi da includere,
@@ -55,16 +57,17 @@ FULL_EXCLUDES=(--exclude=/proc --exclude=/sys --exclude=/dev --exclude=/run --ex
 
 # --- validazione argomenti ------------------------------------------------
 
-if [ "$#" -lt 4 ]; then
-    echo "USAGE_ERROR: backup-target.sh <ssh-target> <identity-file|-> <repo-path> <mode:default|full> [extra-path ...]" >&2
+if [ "$#" -lt 5 ]; then
+    echo "USAGE_ERROR: backup-target.sh <ssh-target> <identity-file|-> <ssh-port|-> <repo-path> <mode:default|full> [extra-path ...]" >&2
     exit 2
 fi
 
 SSH_TARGET="$1"
 IDENTITY="$2"
-REPO="$3"
-MODE="$4"
-shift 4
+SSH_PORT="$3"
+REPO="$4"
+MODE="$5"
+shift 5
 EXTRA_PATHS=("$@")
 
 case "$MODE" in
@@ -128,6 +131,15 @@ if [ "$IDENTITY" != "-" ]; then
         exit 2
     fi
     SSH_OPTS+=(-i "$IDENTITY")
+fi
+if [ "$SSH_PORT" != "-" ]; then
+    case "$SSH_PORT" in
+        ''|*[!0-9]*)
+            echo "USAGE_ERROR: porta SSH non valida: '$SSH_PORT' (attesa una porta numerica o '-')" >&2
+            exit 2
+            ;;
+    esac
+    SSH_OPTS+=(-p "$SSH_PORT")
 fi
 # La verifica della host key resta ai default di SSH, di proposito: se l'host
 # non e' ancora in known_hosts il comando fallisce in modo esplicito invece
