@@ -1,11 +1,15 @@
 # Agentic Audit — skill `/audit` per Hermes Agent
 
-Skill custom per [Hermes Agent](https://github.com/NousResearch) che esegue un audit di sicurezza automatizzato su una macchina remota raggiunta via SSH, combinando script bash deterministici con un agente IA per la narrazione, le conferme e la sintesi finale.
+Skill custom per [Hermes Agent](https://github.com/NousResearch) che esegue un audit di sicurezza automatizzato su una macchina remota, combinando script bash deterministici con un agente IA per la narrazione, le conferme e la sintesi finale. Due pipeline indipendenti e selezionabili: una **dall'interno** della macchina via SSH, una **dall'esterno** via rete da un container effimero — più un backup di sicurezza prima di toccare il target.
 L’agente monitora l’esecuzione e, se il processo si blocca, riporta in chat il motivo con l’output letterale ricevuto. È possibile discutere con l’agente per approfondire o localizzare la causa del problema, senza perdere il progresso dell’audit — ma l’agente non intraprende mai un’azione di propria iniziativa: ogni comando resta soggetto a conferma esplicita dell’utente.
 
 ## A cosa serve
 
-Questa skill automatizza un audit di sicurezza difensivo di base su un sistema Linux, eseguendo in sequenza sei tool consolidati:
+Questa skill automatizza un audit di sicurezza difensivo di base su un sistema Linux, in **due pipeline indipendenti** che scegli all'avvio: una sola, o entrambe.
+
+### Pipeline host — la VM vista dall'interno
+
+Gira **sulla VM target** via SSH ed esegue in sequenza sei tool consolidati:
 
 - **lynis** — hardening e configurazione generale del sistema
 - **trivy** — vulnerabilità note su filesystem e, se presente, immagini Docker
@@ -14,19 +18,105 @@ Questa skill automatizza un audit di sicurezza difensivo di base su un sistema L
 - **chkrootkit** — ricerca di rootkit
 - **rkhunter** — ricerca di rootkit ed exploit noti
 
-Al termine produce due file markdown: un report elaborato (sintesi, problemi critici, raccomandazioni) e un file con i log grezzi integrali di ogni tool, così ogni affermazione nel report è sempre verificabile contro l'output originale.
+Prima di installare qualunque cosa, questa pipeline esegue un **backup di sicurezza** della VM con [restic](https://github.com/restic/restic) — vedi sotto.
 
-**Ambienti supportati**: qualsiasi macchina target Linux basata su **Debian/Ubuntu** (gli script di installazione usano `apt-get`), raggiungibile via SSH dal backend configurato in Hermes. L'agente stesso può girare in qualsiasi ambiente in cui gira Hermes — è stata sviluppata e testata nel setup descritto più sotto.
+### Pipeline container — la VM vista dall'esterno
+
+Gira **su Hermes**, dentro un container effimero che punta al target via rete, come farebbe qualcuno che osserva la macchina da fuori. Non richiede **nessuna credenziale** verso il target, solo raggiungibilità di rete:
+
+- **ssh-audit** — algoritmi, cifrari e configurazione del server SSH
+- **testssl.sh** — configurazione TLS/SSL, certificati, vulnerabilità note del canale cifrato
+- **nuclei** — scansione basata su template per vulnerabilità ed esposizioni note
+
+Il container viene costruito da un `Containerfile` con i tre tool pinnati a versioni fisse e verificati via SHA256 **durante la build**, eseguito con Podman, e distrutto a fine audit.
+
+### Output
+
+Ogni pipeline produce **due file markdown indipendenti**: un report elaborato (sintesi, problemi critici, raccomandazioni) e un file con i log grezzi integrali di ogni tool, così ogni affermazione nel report è sempre verificabile contro l'output originale. Scegliendo una sola pipeline ottieni solo i suoi due file; scegliendo entrambe ne ottieni quattro, ciascuno autosufficiente — i report non vengono mescolati.
+
+**Ambienti supportati**: qualsiasi macchina target Linux basata su **Debian/Ubuntu** (gli script di installazione usano `apt-get`), raggiungibile via SSH dal backend configurato in Hermes. La pipeline container richiede **Podman** su Hermes; il backup richiede **restic** su Hermes.
 
 ## Come avviene l'audit
 
-L'audit non è lasciato all'improvvisazione del modello: la parte meccanica (verifica presenza tool, installazione, esecuzione, salvataggio output) è delegata a tre script bash deterministici (`check-tool.sh`, `install-tool.sh`, `run-tool.sh`), sempre gli stessi comandi fissi per ogni tool. L'agente si occupa di spiegare ogni passaggio, chiedere conferma prima di qualsiasi installazione o modifica del sistema, fermare l'intero audit al primo errore (ogni tool è bloccante), e scrivere la sintesi finale basandosi solo sui dati effettivamente raccolti — mai inventati.
+L'audit non è lasciato all'improvvisazione del modello: la parte meccanica (verifica presenza tool, installazione, esecuzione, salvataggio output, backup, build del container) è delegata a **script bash deterministici**, sempre gli stessi comandi fissi. L'agente si occupa di spiegare ogni passaggio, chiedere conferma prima di qualsiasi installazione o modifica del sistema, fermarsi sugli errori, e scrivere la sintesi finale basandosi solo sui dati effettivamente raccolti — mai inventati.
+
+L'agente non scrive né modifica mai questi script: ne verifica l'hash SHA256 prima di usarli, e si ferma se non corrisponde.
+
+## Il backup di sicurezza (pipeline host)
+
+La pipeline host installa pacchetti e aggiunge repository apt sulla VM. Prima di farlo, esegue un backup con restic come **rete di sicurezza temporanea**, nel caso l'audit causi problemi.
+
+> **Questo non è, e non deve diventare, il backup ufficiale della tua VM.** È uno snapshot di emergenza, pensato per il caso specifico in cui l'audit combini danni. Tienine uno tuo, vero, separato.
+
+Come funziona:
+
+- Gira **su Hermes**, non sulla VM: Hermes tira i dati via SSH con le stesse credenziali già usate dal resto della pipeline host, quindi **non serve configurare nessun nuovo accesso**.
+- I dati arrivano come **tar non compresso**, che preserva proprietario e permessi dei file — importante perché `/etc/sudoers.d` deve tornare `root:root 0440` o `sudo` lo rifiuta. Un semplice `scp` questa fedeltà la perderebbe.
+- Il repository restic è **locale a Hermes**, uno per target, riusato tra audit successivi: restic accumula uno snapshot per esecuzione e deduplica, quindi lo spazio cresce molto più lentamente di quanto si aspetterebbe.
+- La **password te la chiede l'agente a ogni audit** e non viene salvata da nessuna parte. Se è il primo backup per quel target, quella password è l'unica via d'accesso agli snapshot: perderla significa perderli.
+- Se il backup fallisce, l'audit **non si ferma da solo** ma non prosegue di sua iniziativa: l'agente ti dice cosa è andato storto e ti chiede il permesso esplicito di continuare senza rete di sicurezza, o di fermarsi.
+
+### Modi di backup
+
+| Modo | Cosa include | Quando usarlo |
+|---|---|---|
+| `default` | Solo ciò che l'audit modifica: `/etc/apt/sources.list.d`, `/etc/sudoers.d`, la chiave apt di trivy, più l'elenco dei pacchetti installati | Default consigliato. Pochi KB, pochi secondi. |
+| `default` + path extra | Come sopra, più i path che indichi tu | Quando hai sulla VM qualcosa che vuoi proteggere in più |
+| `full` | Tutta la VM (esclusi `/proc`, `/sys`, `/dev`, `/run`, `/tmp`, `/mnt`, `/media`, cache apt) | Quando vuoi copertura totale e hai tempo e spazio su Hermes |
+
+### Ripristino e pulizia: restano a te
+
+La skill **crea** snapshot e non li ripristina mai, nemmeno se glielo chiedi durante l'audit: un ripristino è una modifica del target, e questa skill è dichiaratamente solo di analisi. Allo stesso modo non cancella e non fa `prune` di nulla.
+
+Per ripristinare, da Hermes:
+
+```bash
+# vedi gli snapshot disponibili per un target
+restic -r ~/.audit-backups/<target> snapshots
+
+# ripristina in una cartella di appoggio
+restic -r ~/.audit-backups/<target> restore latest --target /tmp/ripristino
+
+# dentro c'è target-files.tar (con permessi e proprietari originali)
+# e target-files.index.txt, che elenca cosa contiene
+find /tmp/ripristino -name 'target-files*'
+
+# estrai solo ciò che ti serve, come root per riottenere i permessi corretti
+sudo tar -xvf "$(find /tmp/ripristino -name target-files.tar)" -C / <path-da-ripristinare>
+```
+
+Per liberare spazio, `restic forget` e `restic prune` sono comandi tuoi da dare quando vuoi: la skill non li esegue mai.
 
 ## Prerequisiti
 
+### Per tutte le pipeline
+
 1. **Hermes Agent configurato con backend SSH** verso la macchina target (`terminal: ssh` in `~/.hermes/config.yaml`, con host, utente e chiave già funzionanti).
-2. **Macchina target Debian/Ubuntu**, con accesso internet in uscita (per installare i tool mancanti e per il pull automatico degli script, se necessario).
-3. **Regole sudo senza password**, scoped esclusivamente ai comandi usati da questa skill. Senza questo passaggio, l'audit si ferma al primo comando che richiede `sudo`, perché l'esecuzione non interattiva via Hermes non fornisce un terminale a cui `sudo` possa chiedere la password.
+2. **L'agente deve poter eseguire comandi localmente su Hermes**, non solo sulla VM via SSH. Il backup e la pipeline container girano su Hermes. Se nel tuo setup l'agente può solo parlare con la VM, quelle due parti non sono eseguibili e la skill lo dichiara invece di tentare scorciatoie.
+
+### Per la pipeline host
+
+3. **Macchina target Debian/Ubuntu**, con accesso internet in uscita (per installare i tool mancanti e per il pull automatico degli script, se necessario).
+4. **restic su Hermes**, per il backup di sicurezza. Se manca, la skill te lo segnala e ti chiede se installarlo o procedere senza backup — non lo installa da sola. Per installarlo con verifica dell'hash:
+
+   ```bash
+   VER=0.19.1
+   curl -fsSLO "https://github.com/restic/restic/releases/download/v${VER}/restic_${VER}_linux_amd64.bz2"
+   curl -fsSLO "https://github.com/restic/restic/releases/download/v${VER}/SHA256SUMS"
+   grep "restic_${VER}_linux_amd64.bz2" SHA256SUMS | sha256sum -c -
+   bunzip2 "restic_${VER}_linux_amd64.bz2"
+   sudo install -m 755 "restic_${VER}_linux_amd64" /usr/local/bin/restic
+   restic version
+   ```
+
+   Va anche bene `apt install restic`, tenendo presente che la versione nei repository è spesso più vecchia.
+
+5. **Regole sudo senza password** sulla VM, scoped esclusivamente ai comandi usati da questa skill. Senza questo passaggio, l'audit si ferma al primo comando che richiede `sudo`, perché l'esecuzione non interattiva via Hermes non fornisce un terminale a cui `sudo` possa chiedere la password.
+
+### Per la pipeline container
+
+6. **Podman su Hermes**. La pipeline container costruisce ed esegue l'immagine con Podman (non Docker). In WSL serve WSL2: su WSL1 Podman non funziona.
+7. **Raggiungibilità di rete da Hermes al target**, sulle porte che vuoi analizzare (di default 22 e 443). Nessuna credenziale verso il target è necessaria.
 
    Prima verifica i percorsi reali sulla macchina target:
 
@@ -68,16 +158,34 @@ L'audit non è lasciato all'improvvisazione del modello: la parte meccanica (ver
 
    Ogni riga è vincolata al comando esatto, incluso gli argomenti — non è un `NOPASSWD: ALL`. Resta scoped solo a ciò che questa skill usa.
 
+6. **Regola sudo per il backup** (solo se usi la pipeline host). Il backup legge `/etc/sudoers.d`, che un utente non privilegiato non può leggere, quindi serve una riga dedicata. Verifica prima il percorso reale di `tar` sulla VM (`which tar`), poi aggiungi al file `/etc/sudoers.d/audit-scripts`:
+
+   ```
+   <utente> ALL=(root) NOPASSWD: <path-tar> -cf - --absolute-names --ignore-failed-read /etc/apt/sources.list.d /etc/sudoers.d /usr/share/keyrings/trivy.gpg
+   ```
+
+   Questa riga autorizza **esattamente** il comando del modo `default`, argomenti inclusi: non concede `tar` generico.
+
+   Se vuoi usare il modo `full`, serve anche questa riga:
+
+   ```
+   <utente> ALL=(root) NOPASSWD: <path-tar> -cf - --absolute-names --ignore-failed-read --one-file-system --exclude=/proc --exclude=/sys --exclude=/dev --exclude=/run --exclude=/tmp --exclude=/mnt --exclude=/media --exclude=/lost+found --exclude=/var/cache/apt/archives /
+   ```
+
+   > **Attenzione se aggiungi path extra al backup.** Ogni combinazione di path produce un comando `tar` diverso, che le righe sopra non matchano. Puoi aggiungere una riga per la combinazione esatta che ti serve, oppure usare una wildcard — ma sappi cosa stai concedendo: `NOPASSWD` su `tar` con argomenti liberi equivale, in pratica, a **lettura come root di tutto il filesystem** (e `tar` sa anche scrivere file). Preferisci righe esatte per i path che ti servono davvero.
+
 ## Installazione
 
 Dall'ambiente dove usi Hermes (es. la tua WSL):
 
 ```bash
 mkdir -p ~/.hermes/skills/audit
-curl -fsSL "https://raw.githubusercontent.com/gabriele1701/Agentic-audit/v1.0/SKILL.md" -o ~/.hermes/skills/audit/SKILL.md
+curl -fsSL "https://raw.githubusercontent.com/gabriele1701/Agentic-audit/v2.1/SKILL.md" -o ~/.hermes/skills/audit/SKILL.md
 ```
 
-Non serve copiare né gli script né altro: la skill si occupa lei stessa di depositarli sulla macchina target al primo utilizzo (vedi sotto).
+Non serve copiare nessuno script: la skill si occupa lei stessa di depositarli al primo utilizzo, sulla macchina giusta per ciascuno (vedi sotto).
+
+Se aggiorni da una versione precedente, sostituisci il file `SKILL.md` e nient'altro: gli script già depositati vengono ri-verificati per hash al primo audit, e quelli nuovi scaricati su conferma.
 
 ## Utilizzo
 
@@ -87,40 +195,80 @@ Una volta installata, basta invocare:
 /audit
 ```
 
-dentro Hermes. L'agente comunicherà host e utente target, chiederà conferma per iniziare, poi procederà con la sequenza di controllo e narrazione descritta sopra. Alla fine troverai i due file di report nella cartella di output sulla macchina target, il cui percorso ti verrà comunicato.
+dentro Hermes. L'agente ti chiederà **quale pipeline eseguire** (host, container, o entrambe), comunicherà host e utente target, chiederà conferma per iniziare, poi procederà con la sequenza descritta sopra.
+
+Alla fine troverai i report nella cartella di output della rispettiva pipeline, il cui percorso completo ti verrà comunicato: quelli della pipeline host **sulla macchina target**, quelli della pipeline container **su Hermes**.
 
 ## Cosa fa effettivamente la skill
 
-`SKILL.md` contiene l'intera logica operativa: i guardrail che vincolano il comportamento dell'agente, la sequenza fissa dei sei tool, e le istruzioni per generare i due file finali. È consultabile direttamente in questa repo.
+`SKILL.md` contiene l'intera logica operativa: i guardrail che vincolano il comportamento dell'agente, la sequenza fissa di entrambe le pipeline, e le istruzioni per generare i file finali. È consultabile direttamente in questa repo.
 
-**Avviso 1 — pull automatico degli script**: se gli script di supporto non sono presenti sulla macchina target, la skill — dopo aver chiesto conferma — esegue un pull da questa stessa repo (commit fisso) per recuperarli, poi ne verifica l'integrità con SHA256 prima di usarli. Questo comportamento è scritto per intero dentro `SKILL.md`, consultabile lì.
+**Avviso 1 — pull automatico degli script**: se gli script di supporto non sono presenti, la skill — dopo aver chiesto conferma — esegue un pull da questa stessa repo (commit fisso) per recuperarli, poi ne verifica l'integrità con SHA256 prima di usarli. Questo comportamento è scritto per intero dentro `SKILL.md`, consultabile lì.
 
-**Avviso 2 — script di supporto**: i tre script bash che eseguono effettivamente i comandi (`check-tool.sh`, `install-tool.sh`, `run-tool.sh`) sono nella cartella [`scripts/`](./scripts) di questa repo, leggibili e verificabili da chiunque prima di fidarsene.
+**Avviso 2 — script di supporto**: tutti gli script sono in questa repo, leggibili e verificabili da chiunque prima di fidarsene:
+
+| Cartella | Contenuto | Dove viene eseguito |
+|---|---|---|
+| [`scripts/`](./scripts) | `check-tool.sh`, `install-tool.sh`, `run-tool.sh` | sulla macchina target |
+| [`backup/`](./backup) | `backup-target.sh` | su Hermes |
+| [`container/`](./container) | `Containerfile`, `entrypoint.sh`, `check-templates.sh`, `run-audit-container.sh` | su Hermes |
+
+## Aggiornamento dei template di nuclei
+
+I template di nuclei sono pinnati a un tag fisso nel `Containerfile`, per coerenza con l'approccio di integrità del resto del progetto. Il rovescio della medaglia è che invecchiano: nuovi CVE non vengono rilevati.
+
+Per questo, prima di ogni audit container, la skill esegue un controllo in sola lettura che confronta il tag pinnato con l'ultimo disponibile su GitHub, e ti dice di quante release sei indietro. Puoi scegliere di procedere comunque (il report lo dichiarerà), di farli aggiornare all'agente — che rifà la build del solo layer dei template, lasciando in cache i tre tool — oppure di aggiornarli tu.
+
+L'aggiornamento assistito tocca solo l'immagine locale: il pin nel `Containerfile` resta quello, così una build pulita da zero resta riproducibile. Se vuoi rendere permanente l'aggiornamento, modifica a mano `NUCLEI_TEMPLATES_TAG` e `NUCLEI_TEMPLATES_COMMIT` nel `Containerfile` (e aggiorna il suo hash in `SKILL.md`).
 
 ## Personalizzazione
 
-Sia `SKILL.md` sia gli script in `scripts/` sono pensati per essere adattati: puoi modificare guardrail, sequenza dei tool, comandi di scansione o criteri del report secondo le tue necessità. Se personalizzi gli script, ricorda di aggiornare anche gli hash SHA256 attesi dentro `SKILL.md`, altrimenti la verifica di integrità li rifiuterà.
+Sia `SKILL.md` sia gli script sono pensati per essere adattati: puoi modificare guardrail, sequenza dei tool, comandi di scansione, versioni pinnate o criteri del report secondo le tue necessità. Se personalizzi uno script o il `Containerfile`, ricorda di aggiornare anche il relativo hash SHA256 dentro `SKILL.md`, altrimenti la verifica di integrità lo rifiuterà.
 
 ## Limiti noti
+
+### Pipeline host
 
 - **debsecan** potrebbe non essere disponibile nei repository apt per alcune release non più supportate: in quel caso la skill lo segnala e chiede una deroga esplicita per saltarlo, senza bloccare necessariamente il resto dell'audit.
 - La scansione **Docker** con trivy viene eseguita solo se Docker è installato sulla macchina target; altrimenti viene annotata come omessa, non come errore.
 - Pensata e testata solo su target **Debian/Ubuntu**; altre distribuzioni richiederebbero adattare i comandi di installazione negli script.
 
+### Pipeline container
+
+- A differenza di quella host, nella pipeline container **i tre tool girano sempre tutti**, anche se uno fallisce: è un singolo `podman run`, non c'è modo di fermarsi a metà e chiedere conferma. L'agente riporta gli exit code letteralmente e ti chiede come classificarli prima di scrivere il report.
+- Una **porta chiusa o non raggiungibile** è un risultato dell'audit, non un guasto. Se sul target 443 è chiusa, testssl e nuclei lo segnaleranno come errore di connessione: è corretto, e la skill è scritta perché l'agente non lo spacci da solo per un malfunzionamento.
+- I **template di nuclei** sono pinnati, quindi possono essere indietro rispetto agli ultimi CVE. Vedi la sezione sull'aggiornamento sopra.
+
+### Backup
+
+- Il backup **non sostituisce un backup vero** della VM: è una rete di sicurezza di emergenza per il caso specifico in cui l'audit combini danni.
+- La **password non è recuperabile**. Se la perdi, gli snapshot di quel repository sono inaccessibili: è restic che funziona così, non un limite della skill.
+- La skill **non ripristina e non fa pulizia** degli snapshot, in nessun caso: entrambe sono azioni tue, con `restic` direttamente.
+- Lo spazio su Hermes cresce nel tempo, soprattutto usando il modo `full`. La deduplicazione di restic aiuta molto, ma non è magia: controlla periodicamente con `restic stats`.
+- Non sono supportate **esecuzioni concorrenti** sullo stesso target: la staging area ha un percorso stabile per target (serve alla deduplicazione), quindi due audit in parallelo sulla stessa VM si pesterebbero i piedi.
+
 ## Ambiente di test
 
-- **Macchina target**: Ubuntu/Debian
-- **Ambiente agente**: Hermes Agent (terminale)
+- **Macchina target**: Ubuntu/Debian (VM su VMware Workstation)
+- **Ambiente agente**: Hermes Agent (terminale), su WSL2
+- **Runtime container**: Podman (rootless)
 - **Modello**: DeepSeek V4 Flash 0731 (1m token di contesto)
-- **Contesto**: minimo 90k token, raccomandato 130k token
-- **Tempo stimato**: 15-20 minuti
+
+I requisiti di contesto e i tempi misurati sulla v1.0 erano: minimo 90k token, raccomandato 130k, 15-20 minuti per un audit completo. La v2.x ha una `SKILL.md` più grande e due pipeline, quindi queste cifre vanno rimisurate: usale come limite inferiore, non come stima.
 
 ## Versionamento
 
-- Il pull di `SKILL.md` (sezione Installazione) punta al tag `v1.0`.
-- Il pull interno degli script di supporto (dentro `SKILL.md`) punta a un commit SHA fisso, non al tag — per garanzia di integrità massima anche in caso di modifiche future ai tag.
+- Il pull di `SKILL.md` (sezione Installazione) punta a un **tag di release**.
+- Il pull interno degli script (dentro `SKILL.md`) punta a **commit SHA fissi**, non al tag — per garanzia di integrità massima anche in caso di modifiche future ai tag. Ogni gruppo di script ha il suo pin, quindi aggiornare un gruppo non invalida gli altri.
 
-Se aggiorni il progetto, aggiorna questi riferimenti di conseguenza.
+| Riferimento | Punta a |
+|---|---|
+| `SKILL.md` | tag `v2.1` |
+| `scripts/` (pipeline host) | commit `d4d3f52` |
+| `backup/` | commit `50c9234` |
+| `container/` | commit `137d487` |
+
+Se aggiorni il progetto, aggiorna questi riferimenti e i corrispondenti hash SHA256 dentro `SKILL.md`.
 
 ## Disclaimer
 
