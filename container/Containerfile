@@ -35,7 +35,9 @@ ARG NUCLEI_SHA256=ea63d4ae232808cd7c6bc00d0142428e231fab59dae01042246097d195835a
 
 # nuclei-templates — pin a commit fisso; vedi check-templates.sh per il
 # confronto automatico con l'ultimo tag disponibile e per l'aggiornamento
-# mirato (rebuild del solo layer sottostante)
+# mirato (rebuild del solo layer sottostante).
+# NOTA: check-templates.sh legge NUCLEI_TEMPLATES_TAG da QUESTO file con
+# grep, non dall'immagine - non rinominare questo ARG senza aggiornarlo.
 ARG NUCLEI_TEMPLATES_TAG=v10.5.0
 ARG NUCLEI_TEMPLATES_COMMIT=f8b8b8dcd70d93826c3767e1829ef8243af9f03b
 
@@ -94,7 +96,7 @@ RUN set -eu; \
     rm -f /tmp/nuclei.zip
 
 # ---------------------------------------------------------------------------
-# nuclei-templates (pin a commit fisso + metadata per il check lato host)
+# nuclei-templates (pin a commit fisso)
 # ---------------------------------------------------------------------------
 
 # ARG dedicato: cambiandolo SOLO questo layer e i successivi vengono
@@ -107,10 +109,30 @@ RUN set -eu; \
     cd /opt/nuclei-templates; \
     git checkout "${NUCLEI_TEMPLATES_COMMIT}"; \
     [ "$(git rev-parse HEAD)" = "${NUCLEI_TEMPLATES_COMMIT}" ]; \
-    rm -rf .git; \
-    printf 'tag=%s\ncommit=%s\npinned_at=%s\n' \
-        "${NUCLEI_TEMPLATES_TAG}" "${NUCLEI_TEMPLATES_COMMIT}" \
-        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > .pinned-info
+    rm -rf .git
+
+# ---------------------------------------------------------------------------
+# Provenienza delle versioni
+# ---------------------------------------------------------------------------
+#
+# Le versioni pinnate vengono scritte nell'immagine in build-time e copiate
+# dall'entrypoint in <output-dir>/versions.txt a ogni run. Serve perche' un
+# report di audit deve poter dichiarare con quali versioni esatte sono stati
+# prodotti i finding, senza che l'agente le interroghi a runtime (ssh-audit
+# non espone un flag --version) ne' le ricostruisca a memoria.
+#
+# Sta dopo il layer dei template di proposito: un rebuild mirato dei template
+# rigenera anche questo file, cosi' il pin dichiarato resta sempre quello
+# effettivamente presente nell'immagine.
+
+RUN set -eu; \
+    printf 'ssh-audit=%s\ntestssl-commit=%s\nnuclei=%s\nnuclei-templates-tag=%s\nnuclei-templates-commit=%s\nimage-built-at=%s\n' \
+        "${SSH_AUDIT_VERSION}" \
+        "${TESTSSL_COMMIT}" \
+        "${NUCLEI_VERSION}" \
+        "${NUCLEI_TEMPLATES_TAG}" \
+        "${NUCLEI_TEMPLATES_COMMIT}" \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > /opt/.audit-versions
 
 # ---------------------------------------------------------------------------
 # Entrypoint
