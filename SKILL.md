@@ -12,12 +12,12 @@ Agisci come un operatore di sicurezza che esegue un audit formale su una VM targ
 | | Pipeline **host** (v1.0) | Pipeline **container** (v2.0) |
 |---|---|---|
 | **Cosa guarda** | la VM dall'interno | la VM dall'esterno, come la vedrebbe un attaccante in rete |
-| **Dove girano i comandi** | **sulla VM target**, via il backend SSH già configurato | **su Hermes**, in un container effimero |
+| **Dove girano i comandi** | **sulla VM target**, raggiunta via SSH esplicito da Hermes (`vm-exec.sh`) | **su Hermes**, in un container effimero |
 | **Tool** | lynis, trivy, nmap, debsecan, chkrootkit, rkhunter | ssh-audit, testssl, nuclei |
 | **Credenziali verso il target** | sì (SSH, con sudo NOPASSWD scoped) | **nessuna**: solo raggiungibilità di rete |
 | **Output** | sulla VM target | su Hermes |
 
-Il backend SSH per la pipeline host è quello di `terminal:` in `~/.hermes/config.yaml` — NON chiederlo, NON inventarlo, usa quello già attivo.
+**Modello di esecuzione — leggilo prima di tutto il resto.** Hermes gira con `terminal.backend: local`: **ogni comando che esegui parte su Hermes**, mai sulla VM. Tutto ciò che deve girare sulla VM va instradato esplicitamente attraverso `vm-exec.sh` (vedi "Script di supporto"), che legge host, utente, porta e chiave dal blocco `terminal:` di `~/.hermes/config.yaml`. Quei parametri NON si chiedono all'utente e NON si inventano: li risolve lo script.
 
 La pipeline host, prima di installare qualunque cosa, esegue un **backup di sicurezza** della macchina target con restic (passo 1a). È una rete di sicurezza temporanea nel caso l'audit combini danni: **non è, e non deve essere presentata come, il backup ufficiale della VM.** La pipeline container non ha bisogno di backup — non tocca mai il target, lo guarda solo dalla rete.
 
@@ -26,8 +26,16 @@ La parte meccanica di entrambe le pipeline (verifica presenza tool, installazion
 ## GUARDRAIL — VINCOLANTI, SENZA ECCEZIONI
 
 1. **NON PRENDERE MAI INIZIATIVA.** Esegui ESCLUSIVAMENTE i comandi descritti in questa skill, nell'ORDINE ESATTO indicato. NON aggiungere controlli, NON eseguire "già che ci sei" altri comandi, NON deviare dalla sequenza per NESSUN MOTIVO, anche se ti sembra utile o ovvio farlo.
-2. **NON SCRIVERE MAI GLI SCRIPT DI SUPPORTO, IN NESSUNA CIRCOSTANZA.** Vale per tutti e otto: i tre della pipeline host, i quattro della pipeline container, e quello di backup (vedi "Script di supporto"). Se mancano o il loro hash non corrisponde a quello atteso, questo è un GUASTO BLOCCANTE (vedi passo 0.5): fermati e chiedi all'utente di ridepositarli. NON tentare di scriverli tu, NON improvvisare un contenuto alternativo, NON provare a "ricostruirli" dalla memoria di questa conversazione.
-3. **ATTENZIONE A QUALE MACCHINA STAI USANDO.** I tre script della pipeline host girano **sulla VM target** (via SSH). Lo script di backup e quelli della pipeline container girano **su Hermes** (localmente) — il backup legge la VM via SSH da Hermes, non gira sulla VM. Non scambiarli MAI: non lanciare `podman` o `restic` sulla VM target, non eseguire gli script host su Hermes, non scrivere l'output di una pipeline nella cartella dell'altra. Se in questa sessione non hai modo di eseguire comandi **localmente su Hermes** (il backend attivo punta alla VM), né il backup né la pipeline container sono eseguibili: dillo esplicitamente e chiedi all'utente come procedere. NON tentare scorciatoie.
+2. **NON SCRIVERE MAI GLI SCRIPT DI SUPPORTO, IN NESSUNA CIRCOSTANZA.** Vale per tutti e nove: i tre della pipeline host, i quattro della pipeline container, quello di backup e `vm-exec.sh` (vedi "Script di supporto"). Se mancano o il loro hash non corrisponde a quello atteso, questo è un GUASTO BLOCCANTE (vedi passo 0.5): fermati e chiedi all'utente di ridepositarli. NON tentare di scriverli tu, NON improvvisare un contenuto alternativo, NON provare a "ricostruirli" dalla memoria di questa conversazione.
+3. **ATTENZIONE A QUALE MACCHINA STAI USANDO.** Ogni comando che esegui parte **su Hermes**. Quindi:
+    - **Tutto ciò che riguarda la VM target passa da `vm-exec.sh`, SENZA ECCEZIONI.** Vale per i tre script della pipeline host, per le verifiche di hash su quei tre, per il loro eventuale pull, per la lettura degli output e per la scrittura dei report host. Un comando lato VM lanciato senza il wrapper gira su Hermes: nel caso di `install-tool.sh` significherebbe eseguire `apt-get install` sulla macchina sbagliata.
+    - **I tre script host NON esistono su Hermes e non devono mai esservi depositati.** Se un'invocazione senza wrapper ti restituisce "No such file or directory", quello è il sintomo di un wrapper dimenticato, non di uno script mancante: NON scaricarli su Hermes per "risolvere", torna a usare `vm-exec.sh`.
+    - **Lo script di backup e quelli della pipeline container girano su Hermes, direttamente, senza wrapper.** Il backup legge la VM via SSH da sé: non gira sulla VM. Non lanciare MAI `podman` o `restic` sulla VM.
+    - **QUOTING — il comando remoto va in APICI SINGOLI.** `$HOME` e le altre espansioni devono essere risolte dalla shell **remota**, non da quella locale su Hermes:
+      `vm-exec.sh 'sha256sum "$HOME/.audit-scripts/check-tool.sh"'` è giusto;
+      `vm-exec.sh "sha256sum \"$HOME/.audit-scripts/check-tool.sh\""` è SBAGLIATO e **non dà errore**: espande la home di Hermes e poi cerca quel percorso sulla VM, dove non esiste. È il fallimento più insidioso di questa skill — se un percorso lato VM contiene il nome utente di Hermes, hai sbagliato il quoting.
+    - Non scrivere MAI l'output di una pipeline nella cartella dell'altra.
+    - Se `vm-exec.sh` restituisce `CONFIG_ERROR` (exit 65) o un errore di connessione SSH (exit 255), la **pipeline host non è eseguibile**: dillo esplicitamente, riporta l'output letterale e chiedi all'utente come procedere. La pipeline container resta invece eseguibile, perché non usa la VM. NON tentare scorciatoie.
 4. **NON MODIFICARE il sistema**, a parte: (a) l'installazione dei 6 tool della pipeline host sulla VM, (b) la build dell'immagine container su Hermes, (c) la creazione/scrittura del repository restic su Hermes — tutte SOLO se necessarie e SOLO dopo conferma esplicita dell'utente. Il backup **legge** dalla VM e **non la modifica in alcun modo**. NESSUNA remediation, NESSUNA correzione, NESSUNA cancellazione, NESSUN cambio di configurazione, MAI, su nessuna delle due macchine.
 5. **SCANSIONA SOLO IL TARGET CONFERMATO DALL'UTENTE.** La pipeline container punta a un host via rete: usa ESCLUSIVAMENTE l'indirizzo e le porte che l'utente ha confermato al passo 2a. NON scansionare altri host, NON "allargare" la scansione a una sottorete, NON dedurre target aggiuntivi da quello che trovi negli output. Scansionare un host non autorizzato è un problema legale, non solo tecnico.
 6. **CONFERMA SEMPRE PRIMA** di ogni comando che installa pacchetti, costruisce un'immagine, o modifica lo stato di una delle due macchine. I comandi di sola lettura (verifica hash, check dei template, esecuzione dei tool di scansione) procedono senza conferma singola, ma SOLO dopo che l'utente ha dato il via libera generale all'inizio dell'audit.
@@ -37,7 +45,7 @@ La parte meccanica di entrambe le pipeline (verifica presenza tool, installazion
 10. **BLOCCANTE, CON UNA DIFFERENZA TRA LE DUE PIPELINE:**
     - **Pipeline host: ogni tool è bloccante.** Se un tool fallisce (installazione o esecuzione), FERMA l'intero audit, notifica l'errore nel modo più esplicito possibile, e chiedi all'utente se vuole interrompere definitivamente o riprovare. NON proseguire automaticamente con i tool successivi saltando quello fallito.
     - **Pipeline container: i tre tool girano tutti, sempre.** Non è una scelta: il container è un singolo `podman run` effimero, non c'è modo di fermarsi a metà e chiedere conferma. Al termine riporti l'exit code di ciascuno **letteralmente** dal manifest e chiedi all'utente come interpretare qualunque valore diverso da 0 **prima** di comporre il report. In particolare NON classificare da solo una porta chiusa o non raggiungibile come "tool fallito": è un risultato dell'audit, non un guasto, e la distinzione la fa l'utente.
-11. **NON CREARE MAI FILE DIVERSI DA QUELLI ESPLICITAMENTE ELENCATI IN QUESTA SKILL.** Gli unici file che possono esistere al termine dell'audit sono: gli script di supporto (depositati, non scritti da te), i file `.raw`, `manifest.txt` e `versions.txt` nelle cartelle di output (generati dagli script, non da te), il repository restic su Hermes (gestito da `backup-target.sh`, non da te), e i file di report finali (passi 3 e 4). NON creare cartelle, bozze, file temporanei, note, o qualsiasi altro artefatto "per aiutarti a comporre il report".
+11. **NON CREARE MAI FILE DIVERSI DA QUELLI ESPLICITAMENTE ELENCATI IN QUESTA SKILL.** Gli unici file che possono esistere al termine dell'audit sono: i nove script di supporto, `vm-exec.sh` incluso (depositati, non scritti da te), i file `.raw`, `manifest.txt` e `versions.txt` nelle cartelle di output (generati dagli script, non da te), il repository restic su Hermes (gestito da `backup-target.sh`, non da te), e i file di report finali (passi 3 e 4). NON creare cartelle, bozze, file temporanei, note, o qualsiasi altro artefatto "per aiutarti a comporre il report".
 12. **LA PASSWORD DEL BACKUP NON SI SCRIVE E NON SI RIPETE.** La password del repository restic te la fornisce l'utente al passo 1a. Usala **solo** per quella singola invocazione dello script. NON ripeterla in chat, NON riportarla nel report, NON scriverla in un file, NON salvarla per riusarla in un passo successivo. Se serve di nuovo, richiedila.
 13. **IL BACKUP NON RIPRISTINA NULLA, MAI.** Questa skill crea snapshot e non li ripristina in nessun caso, nemmeno se l'audit va male, nemmeno se l'utente lo chiede durante l'audit: un ripristino è una modifica del target, e questa skill è solo di analisi. Se l'utente chiede un ripristino, spiega che va fatto da lui con `restic` direttamente, fuori da questa skill. Allo stesso modo NON cancellare, NON fare `forget`, NON fare `prune` di snapshot esistenti: la pulizia del repository è una sua azione manuale.
 
@@ -45,7 +53,26 @@ La parte meccanica di entrambe le pipeline (verifica presenza tool, installazion
 
 Nessuno di questi file viene scritto da te. Li verifichi (passo 0.5) e li invochi.
 
+### Accesso alla VM — su Hermes
+
+Percorso fisso **su Hermes**: `$HOME/.audit-scripts/helper/`
+
+| File | SHA256 atteso |
+|---|---|
+| `vm-exec.sh` | `ce94cfbecd1d95867f37ff498417fb9246383891a1fb7b4a2a9f412472e5f445` |
+
+Commit pin per il pull di questo file: `5d54bfbe94e56e6c8b112101e9a54d2f95798f0b`
+
+**Cosa fa:**
+
+- **`vm-exec.sh '<comando remoto>'`** — gira **su Hermes** ed esegue `<comando remoto>` **sulla VM target** via SSH. Legge host, utente, porta e chiave dal blocco `terminal:` di `~/.hermes/config.yaml`. Propaga **verbatim** l'exit code del comando remoto (indispensabile: gli script della pipeline host comunicano tramite exit code) e inoltra **stdin** (serve a scrivere file sulla VM con un heredoc risolto in locale). Il comando va passato come **un solo argomento in apici singoli** (guardrail 3). Exit code propri: 64 = uso errato, 65 = `CONFIG_ERROR` (parametri non ricavabili, porta non valida, chiave dichiarata ma assente), 255 = connessione SSH non stabilita.
+- **`vm-exec.sh --show-target`** — non apre nessuna connessione: stampa `VM_TARGET`, `VM_PORT`, `VM_KEY` e `CONFIG_SOURCE`, cioè esattamente quale macchina verrà raggiunta. Serve al passo 0 per mostrarlo all'utente prima di toccare qualunque cosa. Un valore `-` significa "non configurato, deciso dai default di ssh": va passato così com'è a `backup-target.sh`, che lo accetta.
+
+Questo è l'**unico** modo in cui raggiungi la VM. Non comporre comandi `ssh` a mano, in nessun punto dell'audit.
+
 ### Pipeline host (v1.0) — sulla VM target
+
+Questi tre script **risiedono ed eseguono sulla VM target**, e si invocano **sempre** tramite `vm-exec.sh` (guardrail 3).
 
 Percorso fisso **sulla VM target**: `$HOME/.audit-scripts/`
 
@@ -69,13 +96,13 @@ Percorso fisso **su Hermes**: `$HOME/.audit-scripts/backup/`
 
 | File | SHA256 atteso |
 |---|---|
-| `backup-target.sh` | `e2956999827aeddee0a35a153ed49d79c2d0e96a18a0c742041a01f58d115e63` |
+| `backup-target.sh` | `d276118fc08c4a248863d56aaa58ec534c62f4458f03dbbbd995667b9aa1cabe` |
 
-Commit pin per il pull di questo file: `50c9234e0bb1a7496cfc8d3f0fc9a95ead334a91`
+Commit pin per il pull di questo file: `5d54bfbe94e56e6c8b112101e9a54d2f95798f0b`
 
 **Cosa fa:**
 
-- **`backup-target.sh <ssh-target> <identity-file|-> <repo-path> <mode> [extra-path ...]`** — gira **su Hermes**. Tira i dati dalla VM via SSH (con le stesse credenziali della pipeline host) come tar non compresso, che preserva proprietario e permessi dei file; li deposita in una staging area locale con permessi 700; esegue `restic backup` su un repository locale a Hermes; poi **cancella sempre** la staging area, anche in caso di errore. Modi: `default` (solo i path che l'audit modifica) e `full` (tutta la VM). In `default` accetta path aggiuntivi, passati verbatim. Verifica che il tar scaricato non sia vuoto né corrotto prima di procedere. Legge la password da `RESTIC_PASSWORD` (o `RESTIC_PASSWORD_FILE` / `RESTIC_PASSWORD_COMMAND`) nell'ambiente — mai da un argomento. Exit code: 0 = fatto, 1 = fallito (riporta `STAGE=`), 2 = uso errato, 3 = restic non installato su Hermes, 4 = password non configurata.
+- **`backup-target.sh <ssh-target> <identity-file|-> <ssh-port|-> <repo-path> <mode> [extra-path ...]`** — gira **su Hermes**. Tira i dati dalla VM via SSH (con le stesse credenziali della pipeline host) come tar non compresso, che preserva proprietario e permessi dei file; li deposita in una staging area locale con permessi 700; esegue `restic backup` su un repository locale a Hermes; poi **cancella sempre** la staging area, anche in caso di errore. Modi: `default` (solo i path che l'audit modifica) e `full` (tutta la VM). In `default` accetta path aggiuntivi, passati verbatim. Verifica che il tar scaricato non sia vuoto né corrotto prima di procedere. Chiave SSH e porta accettano `-` per lasciare il default (rispettivamente `~/.ssh/config` e la porta 22), ma in questa skill si passano sempre espliciti, ricavati da `vm-exec.sh --show-target`. Legge la password da `RESTIC_PASSWORD` (o `RESTIC_PASSWORD_FILE` / `RESTIC_PASSWORD_COMMAND`) nell'ambiente — mai da un argomento. Exit code: 0 = fatto, 1 = fallito (riporta `STAGE=`), 2 = uso errato, 3 = restic non installato su Hermes, 4 = password non configurata.
 
 ### Pipeline container (v2.0) — su Hermes
 
@@ -107,17 +134,34 @@ Comunica che stai per iniziare l'audit. **Chiedi all'utente quale pipeline esegu
 - **solo container** (v2.0, dall'esterno via rete da Hermes)
 - **entrambe** — in questo caso girano come **stage sequenziali separati, host per prima**
 
-Poi calcola e tieni a mente per il resto della sessione:
+**Se la pipeline host è inclusa**, la prima cosa da verificare è `vm-exec.sh`: tutto ciò che riguarda la VM passa da lui, quindi il suo controllo di integrità va **anticipato qui** rispetto al passo 0.5, prima del suo primo utilizzo. Esegui su Hermes:
 
+```bash
+sha256sum "$HOME/.audit-scripts/helper/vm-exec.sh" 2>/dev/null
+```
+
+Confrontalo con l'hash atteso in "Accesso alla VM". Assente o non corrispondente: si applica il passo 0.5 (punti b e c) con il suo commit pin — è un guasto bloccante per la pipeline host.
+
+Poi mostra all'utente quale macchina verrà raggiunta, prima di toccare qualunque cosa:
+
+```bash
+"$HELPER_DIR/vm-exec.sh" --show-target
+```
+
+Riporta all'utente i valori stampati (`VM_TARGET`, `VM_PORT`, `VM_KEY`) e **fatteli confermare**: è il target che la pipeline host analizzerà e da cui il backup leggerà. Se restituisce `CONFIG_ERROR` (exit 65), la pipeline host non è eseguibile: vedi guardrail 3.
+
+Poi calcola e tieni a mente per il resto della sessione. **Attenzione a quale `$HOME` è quale**: nei percorsi marcati "sulla VM" il `$HOME` è quello della VM e va lasciato espandere alla shell remota (apici singoli, guardrail 3); in quelli marcati "su Hermes" è la home locale.
+
+- **`HELPER_DIR`** = `$HOME/.audit-scripts/helper` — **su Hermes**, fisso. Contiene `vm-exec.sh`.
 - **`NOME_BASE`**:
-  - se la pipeline host è inclusa: esegui `hostname` **sulla VM** e usa `<hostname sanificato: solo alfanumerici e trattini>-<HH-MM>` (se `hostname` non produce un valore utilizzabile, usa `vm-audit-<HH-MM>`)
-  - se è stata scelta **solo** la pipeline container: non hai una sessione sulla VM, quindi NON tentare di eseguire `hostname` lì. Usa `<target sanificato: solo alfanumerici e trattini>-<HH-MM>`, dove il target è quello confermato al passo 2a.
+  - se la pipeline host è inclusa: esegui `"$HELPER_DIR/vm-exec.sh" 'hostname'` e usa `<hostname sanificato: solo alfanumerici e trattini>-<HH-MM>` (se non produce un valore utilizzabile, usa `vm-audit-<HH-MM>`). Questa è anche la prima verifica concreta che l'SSH verso la VM funzioni: se fallisce con exit 255, fermati e vedi guardrail 3.
+  - se è stata scelta **solo** la pipeline container: la VM non va toccata affatto, quindi NON eseguire `hostname` lì né invocare `vm-exec.sh`. Usa `<target sanificato: solo alfanumerici e trattini>-<HH-MM>`, dove il target è quello confermato al passo 2a.
 - **`OUTDIR_HOST`** = `$HOME/audit-output/<NOME_BASE>` — **sulla VM target**. Serve solo se la pipeline host è inclusa.
 - **`OUTDIR_CONTAINER`** = `$HOME/audit-output/<NOME_BASE>-container` — **su Hermes**. Serve solo se la pipeline container è inclusa.
-- **`SCRIPTS_DIR`** = `$HOME/.audit-scripts` — sulla VM target, fisso.
-- **`CONTAINER_DIR`** = `$HOME/.audit-scripts/container` — su Hermes, fisso.
-- **`BACKUP_DIR`** = `$HOME/.audit-scripts/backup` — su Hermes, fisso. Serve solo se la pipeline host è inclusa.
-- **`BACKUP_REPO`** = `$HOME/.audit-backups/<target sanificato>` — su Hermes. Un repository per target, riusato tra audit successivi: restic accumula uno snapshot per esecuzione e deduplica, quindi NON creare un repository nuovo ogni volta.
+- **`SCRIPTS_DIR`** = `$HOME/.audit-scripts` — **sulla VM target**, fisso.
+- **`CONTAINER_DIR`** = `$HOME/.audit-scripts/container` — **su Hermes**, fisso.
+- **`BACKUP_DIR`** = `$HOME/.audit-scripts/backup` — **su Hermes**, fisso. Serve solo se la pipeline host è inclusa.
+- **`BACKUP_REPO`** = `$HOME/.audit-backups/<target sanificato>` — **su Hermes**. Un repository per target, riusato tra audit successivi: restic accumula uno snapshot per esecuzione e deduplica, quindi NON creare un repository nuovo ogni volta.
 
 Annota l'ora corrente (HH:MM) e chiedi conferma esplicita per procedere prima di eseguire qualsiasi altro comando.
 
@@ -127,24 +171,37 @@ Verifica **solo** gli script delle pipeline effettivamente selezionate al passo 
 
 Per ciascun file da verificare, nell'ordine:
 
-- pipeline host: `check-tool.sh`, `install-tool.sh`, `run-tool.sh` in `$SCRIPTS_DIR` **sulla VM**, più `backup-target.sh` in `$BACKUP_DIR` **su Hermes**
+- pipeline host: `vm-exec.sh` in `$HELPER_DIR` **su Hermes** (già verificato al passo 0: non rifarlo), poi `check-tool.sh`, `install-tool.sh`, `run-tool.sh` in `$SCRIPTS_DIR` **sulla VM**, più `backup-target.sh` in `$BACKUP_DIR` **su Hermes**
 - pipeline container: `Containerfile`, `entrypoint.sh`, `check-templates.sh`, `run-audit-container.sh` in `$CONTAINER_DIR` **su Hermes**
 
-a. Esegui `sha256sum "<percorso>/<file>" 2>/dev/null` sulla macchina giusta (vedi guardrail 3).
+a. Calcola l'hash **sulla macchina giusta** (guardrail 3):
 
-b. **Se il file è assente**: notifica chiaramente che non è presente e che può essere recuperato dalla repo pubblica del progetto (`https://github.com/gabriele1701/Agentic-audit`), al commit pin che gli corrisponde (vedi le tabelle sopra: `d4d3f52...` per gli script host, `50c9234e...` per lo script di backup, `137d487...` per i file container). Spiega che farai un pull via `curl` da quella fonte. Chiedi conferma esplicita prima di procedere.
+```bash
+# file su Hermes (vm-exec.sh, backup-target.sh, file container)
+sha256sum "<percorso>/<file>" 2>/dev/null
+
+# file sulla VM (i tre della pipeline host) — apici singoli, $HOME è quello della VM
+"$HELPER_DIR/vm-exec.sh" 'sha256sum "$HOME/.audit-scripts/<file>" 2>/dev/null'
+```
+
+b. **Se il file è assente**: notifica chiaramente che non è presente e che può essere recuperato dalla repo pubblica del progetto (`https://github.com/gabriele1701/Agentic-audit`), al commit pin che gli corrisponde (vedi le tabelle sopra: `5d54bfb...` per `vm-exec.sh` e per lo script di backup, `d4d3f52...` per gli script host, `137d487...` per i file container). Spiega che farai un pull via `curl` da quella fonte. Chiedi conferma esplicita prima di procedere.
 
    Solo dopo conferma, esegui — **sulla macchina giusta**, e con il commit pin e il percorso corretti per quella pipeline:
 
 ```bash
-   # pipeline host (sulla VM target)
-   mkdir -p "$SCRIPTS_DIR"
-   curl -fsSL "https://raw.githubusercontent.com/gabriele1701/Agentic-audit/d4d3f5281b706bcd92a61666ac1a090fc56e9bc8/scripts/<file>" -o "$SCRIPTS_DIR/<file>"
-   chmod +x "$SCRIPTS_DIR/<file>"
+   # vm-exec.sh (su Hermes) — va depositato per primo: senza di lui non si
+   # raggiunge la VM, quindi nemmeno si verificano i tre script host
+   mkdir -p "$HELPER_DIR"
+   curl -fsSL "https://raw.githubusercontent.com/gabriele1701/Agentic-audit/5d54bfbe94e56e6c8b112101e9a54d2f95798f0b/helper/vm-exec.sh" -o "$HELPER_DIR/vm-exec.sh"
+   chmod +x "$HELPER_DIR/vm-exec.sh"
+
+   # pipeline host (SULLA VM TARGET) — un'unica invocazione remota, in apici
+   # singoli: il curl deve girare sulla VM, non su Hermes
+   "$HELPER_DIR/vm-exec.sh" 'mkdir -p "$HOME/.audit-scripts" && curl -fsSL "https://raw.githubusercontent.com/gabriele1701/Agentic-audit/d4d3f5281b706bcd92a61666ac1a090fc56e9bc8/scripts/<file>" -o "$HOME/.audit-scripts/<file>" && chmod +x "$HOME/.audit-scripts/<file>"'
 
    # script di backup (su Hermes)
    mkdir -p "$BACKUP_DIR"
-   curl -fsSL "https://raw.githubusercontent.com/gabriele1701/Agentic-audit/50c9234e0bb1a7496cfc8d3f0fc9a95ead334a91/backup/backup-target.sh" -o "$BACKUP_DIR/backup-target.sh"
+   curl -fsSL "https://raw.githubusercontent.com/gabriele1701/Agentic-audit/5d54bfbe94e56e6c8b112101e9a54d2f95798f0b/backup/backup-target.sh" -o "$BACKUP_DIR/backup-target.sh"
    chmod +x "$BACKUP_DIR/backup-target.sh"
 
    # pipeline container (su Hermes)
@@ -152,6 +209,8 @@ b. **Se il file è assente**: notifica chiaramente che non è presente e che pu�
    curl -fsSL "https://raw.githubusercontent.com/gabriele1701/Agentic-audit/137d487fe1f6e6c73c381c9bf0142bfc9b2da6c2/container/<file>" -o "$CONTAINER_DIR/<file>"
    chmod +x "$CONTAINER_DIR/<file>"   # non necessario per il Containerfile
 ```
+
+   Il `curl` degli script host gira **sulla VM**: serve quindi che la VM abbia accesso a internet. Se non ce l'ha, il pull fallisce e l'utente deve depositare i file a mano — NON ripiegare sul depositarli su Hermes (guardrail 3).
 
    Se l'utente nega il permesso, FERMA l'audit (lo script è necessario, bloccante) e chiedi come procedere.
 
@@ -187,10 +246,12 @@ Avvisa che i modi diversi da `default` richiedono una riga `sudoers` dedicata su
 
 ```bash
 RESTIC_PASSWORD='<password fornita dall'utente>' "$BACKUP_DIR/backup-target.sh" \
-    "<utente>@<host>" "<chiave SSH o - >" "$BACKUP_REPO" "<modo>" [path aggiuntivi...]
+    "<VM_TARGET>" "<VM_KEY>" "<VM_PORT>" "$BACKUP_REPO" "<modo>" [path aggiuntivi...]
 ```
 
-Utente, host e chiave sono quelli del backend SSH già attivo (vedi "Ruolo"): non chiederli.
+`VM_TARGET`, `VM_KEY` e `VM_PORT` sono **esattamente** i valori stampati da `vm-exec.sh --show-target` al passo 0, passati verbatim (`-` compreso, se è quello il valore): non chiederli all'utente, non ricavarli altrove, non riscriverli a memoria.
+
+Questo script gira **su Hermes** e fa SSH verso la VM da sé: NON va invocato tramite `vm-exec.sh` (guardrail 3).
 
 **iv. Esiti.** Interpreta l'output **letteralmente**:
 
@@ -203,18 +264,42 @@ Utente, host e chiave sono quelli del backend SSH già attivo (vedi "Ruolo"): no
 
 #### 1b. Sequenza dei tool
 
-Tutti i comandi di questo passo girano **sulla VM target**, via SSH.
+Tutti i comandi di questo passo girano **sulla VM target**, quindi **ognuno** passa da `vm-exec.sh`, in apici singoli (guardrail 3). Sostituisci `<NOME_BASE>` con il valore calcolato al passo 0: dentro gli apici singoli `$HOME` si espande sulla VM, `<NOME_BASE>` no — quello lo scrivi tu.
 
 Ordine fisso, uno alla volta: lynis → trivy → nmap → debsecan → chkrootkit → rkhunter.
 
-a. **Verifica presenza**: esegui `"$SCRIPTS_DIR/check-tool.sh" <tool>`. Spiega brevemente cosa stai controllando. Guarda l'exit code: 0 = presente, 1 = assente.
+a. **Verifica presenza**: esegui
 
-b. **Se assente (exit 1)**: notifica chiaramente che manca. Spiega cosa farà `install-tool.sh` per quel tool specifico (per trivy, specifica che aggiunge un repository apt dedicato). Chiedi conferma esplicita. Solo dopo conferma, esegui `"$SCRIPTS_DIR/install-tool.sh" <tool> --confirm`. Se l'utente nega il permesso, FERMA l'audit (il tool è bloccante) e chiedi come procedere. Se lo script restituisce `INSTALL_FAILED` (exit 1), FERMA l'audit e riporta l'output letterale.
+```bash
+"$HELPER_DIR/vm-exec.sh" '"$HOME/.audit-scripts/check-tool.sh" <tool>'
+```
+
+   Spiega brevemente cosa stai controllando. Guarda l'exit code: 0 = presente, 1 = assente. Un exit 255 non è una risposta dello script: è la connessione SSH caduta (guardrail 3).
+
+b. **Se assente (exit 1)**: notifica chiaramente che manca. Spiega cosa farà `install-tool.sh` per quel tool specifico (per trivy, specifica che aggiunge un repository apt dedicato). Chiedi conferma esplicita. Solo dopo conferma, esegui
+
+```bash
+"$HELPER_DIR/vm-exec.sh" '"$HOME/.audit-scripts/install-tool.sh" <tool> --confirm'
+```
+
+   Se l'utente nega il permesso, FERMA l'audit (il tool è bloccante) e chiedi come procedere. Se lo script restituisce `INSTALL_FAILED` (exit 1), FERMA l'audit e riporta l'output letterale.
    - **Eccezione debsecan**: se l'installazione fallisce perché il pacchetto non è disponibile per la release della VM, lo script lo segnalerà con `INSTALL_FAILED`. Essendo bloccante, FERMA e chiedi all'utente se vuole una deroga esplicita per saltare debsecan o interrompere l'audit.
 
-c. **Se presente o appena installato**: spiega cosa stai per eseguire, poi esegui `"$SCRIPTS_DIR/run-tool.sh" <tool> "$OUTDIR_HOST"`. Attendi il completamento — lynis e trivy possono richiedere alcuni minuti.
+c. **Se presente o appena installato**: spiega cosa stai per eseguire, poi esegui
 
-d. **Se lo script restituisce `STATUS=FAIL`**: FERMA l'audit, riporta l'exit code e l'ultima parte dell'output del comando (leggibile con `tail -n 20 "$OUTDIR_HOST/<tool>.raw"`), chiedi all'utente se interrompere o riprovare.
+```bash
+"$HELPER_DIR/vm-exec.sh" '"$HOME/.audit-scripts/run-tool.sh" <tool> "$HOME/audit-output/<NOME_BASE>"'
+```
+
+   Attendi il completamento — lynis e trivy possono richiedere alcuni minuti.
+
+d. **Se lo script restituisce `STATUS=FAIL`**: FERMA l'audit, riporta l'exit code e l'ultima parte dell'output del comando, leggibile con
+
+```bash
+"$HELPER_DIR/vm-exec.sh" 'tail -n 20 "$HOME/audit-output/<NOME_BASE>/<tool>.raw"'
+```
+
+   poi chiedi all'utente se interrompere o riprovare.
 
 e. **Se lo script restituisce `STATUS=OK`**: conferma brevemente che l'output è stato salvato in `$OUTDIR_HOST/<tool>.raw`, poi passa al tool successivo.
 
@@ -230,7 +315,7 @@ Tutti i comandi di questo passo girano **su Hermes**, localmente. Se non puoi es
 
 Chiedi all'utente l'indirizzo del target e le porte da usare:
 
-- **Se la pipeline host è già girata in questa sessione**: chiedi se vuole **riusare** l'host target già in uso (quello del backend SSH) o **fornirne uno nuovo**. Non dare per scontato il riuso: chiedilo.
+- **Se la pipeline host è già girata in questa sessione**: chiedi se vuole **riusare** l'host target già analizzato (quello mostrato da `vm-exec.sh --show-target` al passo 0) o **fornirne uno nuovo**. Non dare per scontato il riuso: chiedilo.
 - **Se è stata scelta solo la pipeline container**: chiedi direttamente l'indirizzo del target.
 - **Porte**: chiedi se usare i default (SSH 22, HTTPS 443) o altri valori.
 
@@ -278,9 +363,26 @@ Attendi il completamento — testssl e nuclei possono richiedere alcuni minuti.
 
 ### 3. Report della pipeline host — SOLO se la pipeline host è girata
 
-Leggi `"$OUTDIR_HOST/manifest.txt"` con `cat` per avere la lista esatta di cosa è stato eseguito, con quale exit code, e dove si trova l'output. Poi leggi ciascun `"$OUTDIR_HOST/<tool>.raw"` con `cat`.
+Gli output sono **sulla VM**, quindi anche la lettura e la scrittura dei report passano da `vm-exec.sh`.
 
-Genera **due file separati**, scritti in `"$OUTDIR_HOST"` (sulla VM) tramite heredoc (`cat > "$OUTDIR_HOST/<nome>" << 'EOF' ... EOF`):
+Leggi il manifest per avere la lista esatta di cosa è stato eseguito, con quale exit code, e dove si trova l'output, poi leggi ciascun `.raw`:
+
+```bash
+"$HELPER_DIR/vm-exec.sh" 'cat "$HOME/audit-output/<NOME_BASE>/manifest.txt"'
+"$HELPER_DIR/vm-exec.sh" 'cat "$HOME/audit-output/<NOME_BASE>/<tool>.raw"'
+```
+
+Genera **due file separati**, scritti in `$OUTDIR_HOST` (sulla VM). L'heredoc viene risolto su Hermes e inviato via stdin al `cat` remoto, così il contenuto non deve attraversare nessun livello di quoting aggiuntivo:
+
+```bash
+"$HELPER_DIR/vm-exec.sh" 'cat > "$HOME/audit-output/<NOME_BASE>/<nome-file>"' << 'EOF'
+<contenuto del report>
+EOF
+```
+
+Il delimitatore va scritto `<< 'EOF'` con gli apici: senza, la shell di Hermes espanderebbe `$...` e i backtick dentro il contenuto del report, che include output grezzi dei tool.
+
+I due file sono:
 
 - `$OUTDIR_HOST/<NOME_BASE>-report.md`
 - `$OUTDIR_HOST/<NOME_BASE>-raw-logs.md`

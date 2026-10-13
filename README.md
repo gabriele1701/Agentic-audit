@@ -9,7 +9,7 @@ Questa skill automatizza un audit di sicurezza difensivo di base su un sistema L
 
 ### Pipeline host — la VM vista dall'interno
 
-Gira **sulla VM target** via SSH ed esegue in sequenza sei tool consolidati:
+Gira **sulla VM target**, raggiunta via SSH da Hermes, ed esegue in sequenza sei tool consolidati:
 
 - **lynis** — hardening e configurazione generale del sistema
 - **trivy** — vulnerabilità note su filesystem e, se presente, immagini Docker
@@ -34,13 +34,38 @@ Il container viene costruito da un `Containerfile` con i tre tool pinnati a vers
 
 Ogni pipeline produce **due file markdown indipendenti**: un report elaborato (sintesi, problemi critici, raccomandazioni) e un file con i log grezzi integrali di ogni tool, così ogni affermazione nel report è sempre verificabile contro l'output originale. Scegliendo una sola pipeline ottieni solo i suoi due file; scegliendo entrambe ne ottieni quattro, ciascuno autosufficiente — i report non vengono mescolati.
 
-**Ambienti supportati**: qualsiasi macchina target Linux basata su **Debian/Ubuntu** (gli script di installazione usano `apt-get`), raggiungibile via SSH dal backend configurato in Hermes. La pipeline container richiede **Podman** su Hermes; il backup richiede **restic** su Hermes.
+**Ambienti supportati**: qualsiasi macchina target Linux basata su **Debian/Ubuntu** (gli script di installazione usano `apt-get`), raggiungibile via SSH da Hermes. La pipeline container richiede **Podman** su Hermes; il backup richiede **restic** su Hermes.
 
 ## Come avviene l'audit
 
 L'audit non è lasciato all'improvvisazione del modello: la parte meccanica (verifica presenza tool, installazione, esecuzione, salvataggio output, backup, build del container) è delegata a **script bash deterministici**, sempre gli stessi comandi fissi. L'agente si occupa di spiegare ogni passaggio, chiedere conferma prima di qualsiasi installazione o modifica del sistema, fermarsi sugli errori, e scrivere la sintesi finale basandosi solo sui dati effettivamente raccolti — mai inventati.
 
 L'agente non scrive né modifica mai questi script: ne verifica l'hash SHA256 prima di usarli, e si ferma se non corrisponde.
+
+## Come Hermes raggiunge le due macchine
+
+Questa skill ha bisogno di lavorare su **due macchine diverse**: la VM target (pipeline host) e Hermes stesso (pipeline container e backup). Il backend terminal di Hermes è però un'impostazione **globale e unica**: o punta tutto alla VM via SSH, o esegue tutto in locale. Non esiste un modo nativo per usarne due insieme, o per scegliere il backend comando per comando.
+
+La soluzione adottata è: **backend `local`, SSH esplicito dove serve.**
+
+```
+                       Hermes (backend: local)
+                       ├── podman build/run ────────────► container effimero ──┐
+                       ├── restic backup                                       │ rete
+                       │      └── ssh ──────────────────────────────► VM target ◄┘
+                       └── vm-exec.sh ──── ssh ─────────────────────► VM target
+                                                                      ├── check-tool.sh
+                                                                      ├── install-tool.sh
+                                                                      └── run-tool.sh
+```
+
+Tutto ciò che l'agente esegue parte da Hermes. I tre script della pipeline host continuano a **risiedere ed eseguire sulla VM**, esattamente come in v1.0: vengono raggiunti tramite `helper/vm-exec.sh`, che legge host, utente, porta e chiave dal blocco `terminal:` di `config.yaml` — gli stessi valori che il backend `ssh` usava prima. Quei valori restano quindi in `config.yaml` anche se il backend non li usa più: sono l'unica fonte di verità per la connessione.
+
+Il vantaggio non è solo pratico. Con il backend `ssh` un comando destinato a Hermes finiva silenziosamente sulla VM; ora è il contrario, ma con una differenza importante: i tre script host **non esistono su Hermes**, quindi un'invocazione a cui sfugga il wrapper fallisce con "No such file or directory" invece di eseguire `apt-get install` sulla macchina sbagliata.
+
+### Se preferisci tenere il backend su `ssh`
+
+Puoi farlo, ma funzionerà **solo la pipeline host**: backup e pipeline container richiedono `podman` e `restic` su Hermes, e con il backend `ssh` quei comandi finiscono sulla VM, dove non sono installati. La skill lo rileva e lo dichiara invece di tentare scorciatoie.
 
 ## Il backup di sicurezza (pipeline host)
 
@@ -91,8 +116,32 @@ Per liberare spazio, `restic forget` e `restic prune` sono comandi tuoi da dare 
 
 ### Per tutte le pipeline
 
-1. **Hermes Agent configurato con backend SSH** verso la macchina target (`terminal: ssh` in `~/.hermes/config.yaml`, con host, utente e chiave già funzionanti).
-2. **L'agente deve poter eseguire comandi localmente su Hermes**, non solo sulla VM via SSH. Il backup e la pipeline container girano su Hermes. Se nel tuo setup l'agente può solo parlare con la VM, quelle due parti non sono eseguibili e la skill lo dichiara invece di tentare scorciatoie.
+1. **Hermes Agent con backend terminal in locale.** In `~/.hermes/config.yaml`:
+
+   ```yaml
+   terminal:
+     backend: local
+     ssh_host: <IP della VM>
+     ssh_user: <utente SSH sulla VM>
+     ssh_port: 22
+     ssh_key: '/home/<utente-hermes>/.ssh/<chiave>'
+     cwd: /home/<utente-hermes>
+   ```
+
+   Oppure `hermes config set terminal.backend local`. Il perché è spiegato in "Come Hermes raggiunge le due macchine": è il presupposto su cui si regge tutto il resto.
+
+   Due dettagli che è facile sbagliare:
+   - **`cwd` deve essere una directory esistente su Hermes.** Se resta puntato alla home della VM (tipico se arrivi da un setup con backend `ssh`), *ogni* comando fallisce la `cd` iniziale, anche quelli che non c'entrano nulla con la VM.
+   - **Le chiavi `ssh_*` vanno lasciate dov'erano**, anche se il backend non le usa più: `vm-exec.sh` le legge da lì.
+
+2. **Chiave SSH verso la VM funzionante come file su Hermes**, con la pubblica corrispondente in `~/.ssh/authorized_keys` sulla VM. Deve essere **senza passphrase** o già sbloccata in un agent: le connessioni avvengono in modalità non interattiva (`BatchMode=yes`), quindi un prompt non verrebbe mostrato a nessuno e il comando fallirebbe. Verifica con:
+
+   ```bash
+   ~/.audit-scripts/helper/vm-exec.sh --show-target   # quale macchina verrà raggiunta
+   ~/.audit-scripts/helper/vm-exec.sh 'whoami'        # deve rispondere l'utente della VM
+   ```
+
+   Se il secondo comando risponde con l'utente di *Hermes* invece che con quello della VM, `ssh_host` sta puntando a Hermes stesso: correggilo prima di lanciare un audit, altrimenti la pipeline host analizzerebbe la macchina sbagliata.
 
 ### Per la pipeline host
 
@@ -111,12 +160,9 @@ Per liberare spazio, `restic forget` e `restic prune` sono comandi tuoi da dare 
 
    Va anche bene `apt install restic`, tenendo presente che la versione nei repository è spesso più vecchia.
 
-5. **Regole sudo senza password** sulla VM, scoped esclusivamente ai comandi usati da questa skill. Senza questo passaggio, l'audit si ferma al primo comando che richiede `sudo`, perché l'esecuzione non interattiva via Hermes non fornisce un terminale a cui `sudo` possa chiedere la password.
+5. **Regole sudo senza password sulla VM target**, scoped esclusivamente ai comandi usati da questa skill. Senza questo passaggio, l'audit si ferma al primo comando che richiede `sudo`, perché l'esecuzione non interattiva non fornisce un terminale a cui `sudo` possa chiedere la password.
 
-### Per la pipeline container
-
-6. **Podman su Hermes**. La pipeline container costruisce ed esegue l'immagine con Podman (non Docker). In WSL serve WSL2: su WSL1 Podman non funziona.
-7. **Raggiungibilità di rete da Hermes al target**, sulle porte che vuoi analizzare (di default 22 e 443). Nessuna credenziale verso il target è necessaria.
+   > Il file va creato **sulla VM target**, non su Hermes, e l'`<utente>` è quello SSH della VM (`ssh_user` in `config.yaml`). Su Hermes questa skill non ha bisogno di nessuna regola `sudo`.
 
    Prima verifica i percorsi reali sulla macchina target:
 
@@ -158,7 +204,13 @@ Per liberare spazio, `restic forget` e `restic prune` sono comandi tuoi da dare 
 
    Ogni riga è vincolata al comando esatto, incluso gli argomenti — non è un `NOPASSWD: ALL`. Resta scoped solo a ciò che questa skill usa.
 
-6. **Regola sudo per il backup** (solo se usi la pipeline host). Il backup legge `/etc/sudoers.d`, che un utente non privilegiato non può leggere, quindi serve una riga dedicata. Verifica prima il percorso reale di `tar` sulla VM (`which tar`), poi aggiungi al file `/etc/sudoers.d/audit-scripts`:
+   Verifica che sudo le abbia accettate prima di lanciare un audit:
+
+   ```bash
+   sudo -l -U <utente>
+   ```
+
+6. **Regola sudo per il backup**, sempre sulla VM target. Il backup legge `/etc/sudoers.d`, che un utente non privilegiato non può leggere, quindi serve una riga dedicata. Verifica prima il percorso reale di `tar` sulla VM (`which tar`), poi aggiungi al file `/etc/sudoers.d/audit-scripts`:
 
    ```
    <utente> ALL=(root) NOPASSWD: <path-tar> -cf - --absolute-names --ignore-failed-read /etc/apt/sources.list.d /etc/sudoers.d /usr/share/keyrings/trivy.gpg
@@ -172,7 +224,21 @@ Per liberare spazio, `restic forget` e `restic prune` sono comandi tuoi da dare 
    <utente> ALL=(root) NOPASSWD: <path-tar> -cf - --absolute-names --ignore-failed-read --one-file-system --exclude=/proc --exclude=/sys --exclude=/dev --exclude=/run --exclude=/tmp --exclude=/mnt --exclude=/media --exclude=/lost+found --exclude=/var/cache/apt/archives /
    ```
 
+   Le due righe devono combaciare **carattere per carattere** con il comando che `backup-target.sh` costruisce: stesso ordine dei flag e stesso ordine dei path. Conviene copiare i path direttamente dall'array `DEFAULT_PATHS` dello script ([`backup/backup-target.sh`](./backup/backup-target.sh)) invece di ritrascriverli: se divergono anche di un solo carattere, `sudo` rifiuta la riga e il backup fallisce con `STATUS=FAIL STAGE=pull-files`.
+
    > **Attenzione se aggiungi path extra al backup.** Ogni combinazione di path produce un comando `tar` diverso, che le righe sopra non matchano. Puoi aggiungere una riga per la combinazione esatta che ti serve, oppure usare una wildcard — ma sappi cosa stai concedendo: `NOPASSWD` su `tar` con argomenti liberi equivale, in pratica, a **lettura come root di tutto il filesystem** (e `tar` sa anche scrivere file). Preferisci righe esatte per i path che ti servono davvero.
+
+### Per la pipeline container
+
+7. **Podman su Hermes**. La pipeline container costruisce ed esegue l'immagine con Podman (non Docker). In WSL serve WSL2: su WSL1 Podman non funziona. Verifica con `podman info`.
+
+   Su WSL, Podman rootless segnala di solito che non c'è una sessione systemd utente e ripiega su `cgroupfs`: sono warning innocui e la build funziona comunque. Se però vuoi che l'audit possa partire anche da un contesto non interattivo (cron, gateway) senza che i processi vengano terminati alla chiusura della sessione di login, abilita il lingering una volta per sempre:
+
+   ```bash
+   loginctl enable-linger "$(id -u)"
+   ```
+
+8. **Raggiungibilità di rete da Hermes al target**, sulle porte che vuoi analizzare (di default 22 e 443). Nessuna credenziale verso il target è necessaria.
 
 ## Installazione
 
@@ -180,7 +246,7 @@ Dall'ambiente dove usi Hermes (es. la tua WSL):
 
 ```bash
 mkdir -p ~/.hermes/skills/audit
-curl -fsSL "https://raw.githubusercontent.com/gabriele1701/Agentic-audit/v2.1/SKILL.md" -o ~/.hermes/skills/audit/SKILL.md
+curl -fsSL "https://raw.githubusercontent.com/gabriele1701/Agentic-audit/v2.2/SKILL.md" -o ~/.hermes/skills/audit/SKILL.md
 ```
 
 Non serve copiare nessuno script: la skill si occupa lei stessa di depositarli al primo utilizzo, sulla macchina giusta per ciascuno (vedi sotto).
@@ -209,8 +275,9 @@ Alla fine troverai i report nella cartella di output della rispettiva pipeline, 
 
 | Cartella | Contenuto | Dove viene eseguito |
 |---|---|---|
+| [`helper/`](./helper) | `vm-exec.sh` | su Hermes (apre SSH verso la VM) |
 | [`scripts/`](./scripts) | `check-tool.sh`, `install-tool.sh`, `run-tool.sh` | sulla macchina target |
-| [`backup/`](./backup) | `backup-target.sh` | su Hermes |
+| [`backup/`](./backup) | `backup-target.sh` | su Hermes (legge la VM via SSH) |
 | [`container/`](./container) | `Containerfile`, `entrypoint.sh`, `check-templates.sh`, `run-audit-container.sh` | su Hermes |
 
 ## Aggiornamento dei template di nuclei
@@ -226,6 +293,12 @@ L'aggiornamento assistito tocca solo l'immagine locale: il pin nel `Containerfil
 Sia `SKILL.md` sia gli script sono pensati per essere adattati: puoi modificare guardrail, sequenza dei tool, comandi di scansione, versioni pinnate o criteri del report secondo le tue necessità. Se personalizzi uno script o il `Containerfile`, ricorda di aggiornare anche il relativo hash SHA256 dentro `SKILL.md`, altrimenti la verifica di integrità lo rifiuterà.
 
 ## Limiti noti
+
+### Architettura di esecuzione
+
+- Il backend terminal di Hermes è **un'impostazione unica e globale**: non si possono usare due backend insieme, né scegliere il backend comando per comando. Da qui la scelta di `local` + SSH esplicito. Se cambi quell'impostazione, cambia il comportamento di *tutte* le skill su quella istanza di Hermes, non solo di questa.
+- Il wrapper `vm-exec.sh` apre **una connessione SSH per comando**: nessuna shell remota persistente tra un comando e l'altro. In pratica non è un problema (gli script sono autonomi e i percorsi sono assoluti), ma significa che un `export` o un `cd` non sopravvivono all'invocazione successiva.
+- `vm-exec.sh` legge `config.yaml` con un parser minimale che riconosce le quattro chiavi `ssh_*` dentro il blocco `terminal:`. Se la tua versione di Hermes tiene quei valori altrove (per esempio come variabili `TERMINAL_SSH_*` in `.env`), passali con `AUDIT_VM_HOST`, `AUDIT_VM_USER`, `AUDIT_VM_PORT`, `AUDIT_VM_KEY`.
 
 ### Pipeline host
 
@@ -250,7 +323,7 @@ Sia `SKILL.md` sia gli script sono pensati per essere adattati: puoi modificare 
 ## Ambiente di test
 
 - **Macchina target**: Ubuntu/Debian (VM su VMware Workstation)
-- **Ambiente agente**: Hermes Agent (terminale), su WSL2
+- **Ambiente agente**: Hermes Agent (terminale), su WSL2, con `terminal.backend: local`
 - **Runtime container**: Podman (rootless)
 - **Modello**: DeepSeek V4 Flash 0731 (1m token di contesto)
 
@@ -263,9 +336,10 @@ I requisiti di contesto e i tempi misurati sulla v1.0 erano: minimo 90k token, r
 
 | Riferimento | Punta a |
 |---|---|
-| `SKILL.md` | tag `v2.1` |
+| `SKILL.md` | tag `v2.2` |
+| `helper/` (accesso alla VM) | commit `5d54bfb` |
 | `scripts/` (pipeline host) | commit `d4d3f52` |
-| `backup/` | commit `50c9234` |
+| `backup/` | commit `5d54bfb` |
 | `container/` | commit `137d487` |
 
 Se aggiorni il progetto, aggiorna questi riferimenti e i corrispondenti hash SHA256 dentro `SKILL.md`.
