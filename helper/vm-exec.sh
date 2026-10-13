@@ -132,12 +132,17 @@ fi
 # Serve alla skill per mostrare all'utente, prima di toccare qualunque cosa,
 # esattamente quale macchina verra' raggiunta dalla pipeline host. Non apre
 # nessuna connessione.
+#
+# I valori sono stampati in forma direttamente riutilizzabile come argomenti
+# di backup-target.sh, che accetta "-" per "lascia decidere a ssh": quindi un
+# parametro non configurato esce come "-" e non come testo descrittivo.
 
 if [ "$ARG" = "--show-target" ]; then
     echo "VM_TARGET=${VM_USER}@${VM_HOST}"
-    echo "VM_PORT=${VM_PORT:-22 (default ssh)}"
-    echo "VM_KEY=${VM_KEY:-- (deciso da ~/.ssh/config)}"
+    echo "VM_PORT=${VM_PORT:--}"
+    echo "VM_KEY=${VM_KEY:--}"
     echo "CONFIG_SOURCE=${CONFIG}"
+    echo "NOTA: '-' significa non configurato, deciso dai default di ssh (porta 22) o da ~/.ssh/config (chiave)."
     exit 0
 fi
 
