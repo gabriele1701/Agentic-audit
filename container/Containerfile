@@ -1,0 +1,123 @@
+# Containerfile — Agentic-audit v2.0, stage "container" (ispettivo esterno)
+#
+# Immagine custom con ssh-audit, testssl.sh e nuclei preinstallati, pinnati
+# a versioni/commit fissi e verificati via hash/checksum durante la build.
+# Nessuna verifica a runtime: il container è pensato per essere effimero
+# (build -> run -> distrutto), coerente con la decisione presa in fase di
+# progettazione v2.0.
+#
+# Build (da questa cartella):
+#   podman build -t localhost/agentic-audit-container:v2.0 -f Containerfile .
+#
+# Per aggiornare una versione pinnata: cambiare il relativo ARG qui sotto
+# E il corrispondente hash/commit, verificandolo manualmente contro la
+# fonte ufficiale (PyPI / release GitHub) — mai scaricare "latest" a scatola
+# chiusa. Per i soli nuclei-templates vedi anche check-templates.sh.
+
+FROM debian:bookworm-slim
+
+# ---------------------------------------------------------------------------
+# Versioni pinnate
+# ---------------------------------------------------------------------------
+
+# ssh-audit — pacchetto PyPI, sdist pinnato e verificato via SHA256
+ARG SSH_AUDIT_VERSION=3.9.0
+ARG SSH_AUDIT_SHA256=f1225d0364b3cb61c7dfb1f5065a6958dbb814d98b2c1dd2a779ba2cdef41f61
+
+# testssl.sh — pin al commit dereferenziato del tag v3.2.4 (non al tag stesso,
+# stesso schema di pinning a commit fisso usato per gli script v1.0)
+ARG TESTSSL_COMMIT=97763a411c525720a5f9bd9d2cded416b10f210a
+
+# nuclei — binario precompilato dalle release GitHub, verificato via SHA256
+# (hash confrontato manualmente con il checksums.txt ufficiale della release)
+ARG NUCLEI_VERSION=3.11.1
+ARG NUCLEI_SHA256=ea63d4ae232808cd7c6bc00d0142428e231fab59dae01042246097d195835ab6
+
+# nuclei-templates — pin a commit fisso; vedi check-templates.sh per il
+# confronto automatico con l'ultimo tag disponibile e per l'aggiornamento
+# mirato (rebuild del solo layer sottostante)
+ARG NUCLEI_TEMPLATES_TAG=v10.5.0
+ARG NUCLEI_TEMPLATES_COMMIT=f8b8b8dcd70d93826c3767e1829ef8243af9f03b
+
+# ---------------------------------------------------------------------------
+# Dipendenze di sistema
+# ---------------------------------------------------------------------------
+
+RUN set -eu; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        git \
+        unzip \
+        python3 \
+        python3-pip \
+    ; \
+    rm -rf /var/lib/apt/lists/*
+
+# ---------------------------------------------------------------------------
+# ssh-audit
+# ---------------------------------------------------------------------------
+
+RUN set -eu; \
+    pip download --no-deps --no-binary :all: --no-cache-dir \
+        "ssh-audit==${SSH_AUDIT_VERSION}" -d /tmp/ssh-audit-dl; \
+    SDIST="/tmp/ssh-audit-dl/ssh_audit-${SSH_AUDIT_VERSION}.tar.gz"; \
+    echo "${SSH_AUDIT_SHA256}  ${SDIST}" | sha256sum -c -; \
+    pip install --no-index --find-links=/tmp/ssh-audit-dl --no-cache-dir \
+        --break-system-packages "ssh-audit==${SSH_AUDIT_VERSION}"; \
+    rm -rf /tmp/ssh-audit-dl
+
+# ---------------------------------------------------------------------------
+# testssl.sh
+# ---------------------------------------------------------------------------
+
+RUN set -eu; \
+    git clone --no-checkout https://github.com/testssl/testssl.sh.git /opt/testssl; \
+    cd /opt/testssl; \
+    git checkout "${TESTSSL_COMMIT}"; \
+    [ "$(git rev-parse HEAD)" = "${TESTSSL_COMMIT}" ]; \
+    rm -rf .git; \
+    chmod +x testssl.sh
+RUN ln -s /opt/testssl/testssl.sh /usr/local/bin/testssl
+
+# ---------------------------------------------------------------------------
+# nuclei (binario)
+# ---------------------------------------------------------------------------
+
+RUN set -eu; \
+    curl -fsSL -o /tmp/nuclei.zip \
+        "https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/nuclei_${NUCLEI_VERSION}_linux_amd64.zip"; \
+    echo "${NUCLEI_SHA256}  /tmp/nuclei.zip" | sha256sum -c -; \
+    unzip -o /tmp/nuclei.zip nuclei -d /usr/local/bin; \
+    chmod +x /usr/local/bin/nuclei; \
+    rm -f /tmp/nuclei.zip
+
+# ---------------------------------------------------------------------------
+# nuclei-templates (pin a commit fisso + metadata per il check lato host)
+# ---------------------------------------------------------------------------
+
+# ARG dedicato: cambiandolo SOLO questo layer e i successivi vengono
+# invalidati in una rebuild (vedi check-templates.sh --rebuild-templates);
+# i layer precedenti (ssh-audit/testssl/nuclei) restano in cache.
+ARG TEMPLATES_CACHE_BUST=0
+
+RUN set -eu; \
+    git clone --no-checkout https://github.com/projectdiscovery/nuclei-templates.git /opt/nuclei-templates; \
+    cd /opt/nuclei-templates; \
+    git checkout "${NUCLEI_TEMPLATES_COMMIT}"; \
+    [ "$(git rev-parse HEAD)" = "${NUCLEI_TEMPLATES_COMMIT}" ]; \
+    rm -rf .git; \
+    printf 'tag=%s\ncommit=%s\npinned_at=%s\n' \
+        "${NUCLEI_TEMPLATES_TAG}" "${NUCLEI_TEMPLATES_COMMIT}" \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > .pinned-info
+
+# ---------------------------------------------------------------------------
+# Entrypoint
+# ---------------------------------------------------------------------------
+
+COPY entrypoint.sh /opt/entrypoint.sh
+RUN chmod +x /opt/entrypoint.sh
+
+WORKDIR /opt
+ENTRYPOINT ["/opt/entrypoint.sh"]
