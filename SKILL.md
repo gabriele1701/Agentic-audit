@@ -115,7 +115,7 @@ Percorso fisso **su Hermes**: `$HOME/.audit-scripts/container/`
 | `check-templates.sh` | `6c078a2334fa242d25d1ec8064d0dcc1ad4f97661237eac8d283c1e575c2d0f8` |
 | `run-audit-container.sh` | `dca0577fa6a92492ba8d1871896eb70dd2851e05d2c406b05f70adaa253d0410` |
 
-Commit pin per il pull di questi quattro: `137d487fe1f6e6c73c381c9bf0142bfc9b2da6c2`
+Commit pin per il pull di questi quattro: `266072c`
 
 **Cosa fa ciascuno:**
 
