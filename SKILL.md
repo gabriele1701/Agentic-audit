@@ -192,8 +192,7 @@ b. **Se il file è assente**: notifica chiaramente che non è presente e che pu�
    # vm-exec.sh (su Hermes) — va depositato per primo: senza di lui non si
    # raggiunge la VM, quindi nemmeno si verificano i tre script host
    mkdir -p "$HELPER_DIR"
-   curl -fsSL "https://raw.githubusercontent.com/gabriele1701/Agentic-audit/5d54bfbe94e56e6c8b112101e9a54d2f95798f0b/helper/vm-exec.sh" -o "$HELPER_DIR/vm-exec.sh"
-   chmod +x "$HELPER_DIR/vm-exec.sh"
+   curl -fsSL "https://raw.githubusercontent.com/gabriele1701/Agentic-audit/5d54bfbe94e56e6c8b112101e9a54d2f95798f0b/helper/vm-exec.sh" -o "$HELPER_DIR/vm-exec.sh" && chmod +x "$HELPER_DIR/vm-exec.sh"
 
    # pipeline host (SULLA VM TARGET) — un'unica invocazione remota, in apici
    # singoli: il curl deve girare sulla VM, non su Hermes
@@ -201,13 +200,17 @@ b. **Se il file è assente**: notifica chiaramente che non è presente e che pu�
 
    # script di backup (su Hermes)
    mkdir -p "$BACKUP_DIR"
-   curl -fsSL "https://raw.githubusercontent.com/gabriele1701/Agentic-audit/5d54bfbe94e56e6c8b112101e9a54d2f95798f0b/backup/backup-target.sh" -o "$BACKUP_DIR/backup-target.sh"
-   chmod +x "$BACKUP_DIR/backup-target.sh"
+   curl -fsSL "https://raw.githubusercontent.com/gabriele1701/Agentic-audit/5d54bfbe94e56e6c8b112101e9a54d2f95798f0b/backup/backup-target.sh" -o "$BACKUP_DIR/backup-target.sh" && chmod +x "$BACKUP_DIR/backup-target.sh"
 
-   # pipeline container (su Hermes)
+   # pipeline container (su Hermes) — i TRE SCRIPT (entrypoint.sh,
+   # check-templates.sh, run-audit-container.sh), una riga per ciascuno:
+   # il chmod e' concatenato al curl e non va separato, altrimenti il file
+   # resta a 644 e la pipeline fallisce con "Permission denied" (exit 126)
    mkdir -p "$CONTAINER_DIR"
-   curl -fsSL "https://raw.githubusercontent.com/gabriele1701/Agentic-audit/266072c08570127707fb468789549c11430d782d/container/<file>" -o "$CONTAINER_DIR/<file>"
-   chmod +x "$CONTAINER_DIR/<file>"   # non necessario per il Containerfile
+   curl -fsSL "https://raw.githubusercontent.com/gabriele1701/Agentic-audit/266072c08570127707fb468789549c11430d782d/container/<script>" -o "$CONTAINER_DIR/<script>" && chmod +x "$CONTAINER_DIR/<script>"
+
+   # il Containerfile a parte: non e' eseguibile, nessun chmod
+   curl -fsSL "https://raw.githubusercontent.com/gabriele1701/Agentic-audit/266072c08570127707fb468789549c11430d782d/container/Containerfile" -o "$CONTAINER_DIR/Containerfile"
 ```
 
    Il `curl` degli script host gira **sulla VM**: serve quindi che la VM abbia accesso a internet. Se non ce l'ha, il pull fallisce e l'utente deve depositare i file a mano — NON ripiegare sul depositarli su Hermes (guardrail 3).
