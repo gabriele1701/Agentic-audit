@@ -45,6 +45,17 @@ ARG NUCLEI_TEMPLATES_COMMIT=f8b8b8dcd70d93826c3767e1829ef8243af9f03b
 # Dipendenze di sistema
 # ---------------------------------------------------------------------------
 
+# Le quattro righe dopo python3-pip sono dipendenze di RUNTIME di testssl.sh,
+# che le invoca come comandi esterni: senza di esse testssl muore all'avvio
+# con "Fatal error: You need to install <binario>" (exit 244) e non produce
+# alcun dato sul target. Servono esplicitamente perche' bookworm-slim non le
+# include e --no-install-recommends non tira dentro nulla di implicito:
+#   bsdextrautils  -> hexdump   (e' il binario su cui testssl abortisce)
+#   xxd            -> xxd       (secondo dumper esadecimale)
+#   bind9-dnsutils -> dig, e per dipendenza host/nslookup (risoluzioni DNS)
+#   procps         -> ps
+# openssl NON serve aggiungerlo: nell'immagine c'e' gia'.
+# Set verificato con un run completo di testssl (exit 0, scansione intera).
 RUN set -eu; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
@@ -54,6 +65,10 @@ RUN set -eu; \
         unzip \
         python3 \
         python3-pip \
+        bsdextrautils \
+        xxd \
+        bind9-dnsutils \
+        procps \
     ; \
     rm -rf /var/lib/apt/lists/*
 
