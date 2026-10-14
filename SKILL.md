@@ -113,9 +113,9 @@ Percorso fisso **su Hermes**: `$HOME/.audit-scripts/container/`
 | `Containerfile` | `9d528e6c6c4d17c2aa95f201ad5ef6c2cadb70e0bfc0fc10e00f5cf549826796` |
 | `entrypoint.sh` | `497ac4565d4f90d8b6a280e457f8c59f268108331aec3894839e38dc3a6c2d6e` |
 | `check-templates.sh` | `6c078a2334fa242d25d1ec8064d0dcc1ad4f97661237eac8d283c1e575c2d0f8` |
-| `run-audit-container.sh` | `dca0577fa6a92492ba8d1871896eb70dd2851e05d2c406b05f70adaa253d0410` |
+| `run-audit-container.sh` | `5fd72a81b3a45aa58f1b317bc378408ee395d15b7cdbc72a2fe21b71c3a40177` |
 
-Commit pin per il pull di questi quattro: `266072c`
+Commit pin per il pull di questi quattro: `266072c08570127707fb468789549c11430d782d`
 
 **Cosa fa ciascuno:**
 
@@ -184,7 +184,7 @@ sha256sum "<percorso>/<file>" 2>/dev/null
 "$HELPER_DIR/vm-exec.sh" 'sha256sum "$HOME/.audit-scripts/<file>" 2>/dev/null'
 ```
 
-b. **Se il file è assente**: notifica chiaramente che non è presente e che può essere recuperato dalla repo pubblica del progetto (`https://github.com/gabriele1701/Agentic-audit`), al commit pin che gli corrisponde (vedi le tabelle sopra: `5d54bfb...` per `vm-exec.sh` e per lo script di backup, `d4d3f52...` per gli script host, `137d487...` per i file container). Spiega che farai un pull via `curl` da quella fonte. Chiedi conferma esplicita prima di procedere.
+b. **Se il file è assente**: notifica chiaramente che non è presente e che può essere recuperato dalla repo pubblica del progetto (`https://github.com/gabriele1701/Agentic-audit`), al commit pin che gli corrisponde (vedi le tabelle sopra: `5d54bfb...` per `vm-exec.sh` e per lo script di backup, `d4d3f52...` per gli script host, `266072c...` per i file container). Spiega che farai un pull via `curl` da quella fonte. Chiedi conferma esplicita prima di procedere.
 
    Solo dopo conferma, esegui — **sulla macchina giusta**, e con il commit pin e il percorso corretti per quella pipeline:
 
@@ -206,7 +206,7 @@ b. **Se il file è assente**: notifica chiaramente che non è presente e che pu�
 
    # pipeline container (su Hermes)
    mkdir -p "$CONTAINER_DIR"
-   curl -fsSL "https://raw.githubusercontent.com/gabriele1701/Agentic-audit/137d487fe1f6e6c73c381c9bf0142bfc9b2da6c2/container/<file>" -o "$CONTAINER_DIR/<file>"
+   curl -fsSL "https://raw.githubusercontent.com/gabriele1701/Agentic-audit/266072c08570127707fb468789549c11430d782d/container/<file>" -o "$CONTAINER_DIR/<file>"
    chmod +x "$CONTAINER_DIR/<file>"   # non necessario per il Containerfile
 ```
 

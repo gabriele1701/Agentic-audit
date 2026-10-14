@@ -340,7 +340,7 @@ I requisiti di contesto e i tempi misurati sulla v1.0 erano: minimo 90k token, r
 | `helper/` (accesso alla VM) | commit `5d54bfb` |
 | `scripts/` (pipeline host) | commit `d4d3f52` |
 | `backup/` | commit `5d54bfb` |
-| `container/` | commit `137d487` |
+| `container/` | commit `266072c` |
 
 Se aggiorni il progetto, aggiorna questi riferimenti e i corrispondenti hash SHA256 dentro `SKILL.md`.
 
