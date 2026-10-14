@@ -37,8 +37,16 @@ fi
 
 mkdir -p "$OUTDIR"
 
+# --isolation chroot: su Podman rootless in WSL (nessuna sessione systemd
+# utente "vera" per logind, anche con linger abilitato) crun puo' fallire
+# gli step RUN con "sd-bus call: Permission denied" durante la creazione
+# del cgroup - il fallback automatico di Podman a --cgroup-manager=cgroupfs
+# (solo un warning) non basta a evitarlo in fase di build. L'isolamento
+# chroot esegue gli step RUN senza passare da crun/cgroup, quindi elimina
+# il problema. Non serve per `podman run` qui sotto: quello e' un path
+# diverso in crun e in questo ambiente funziona gia' senza modifiche.
 echo "--- build immagine (cache Podman attiva, nessuna ricostruzione se nulla e' cambiato) ---"
-if ! podman build -t "$IMAGE_TAG" -f "$CONTAINERFILE" "$SCRIPT_DIR"; then
+if ! podman build --isolation chroot -t "$IMAGE_TAG" -f "$CONTAINERFILE" "$SCRIPT_DIR"; then
     echo "RUN_FAILED: 'podman build' terminato con errore (vedi output sopra)" >&2
     exit 1
 fi
