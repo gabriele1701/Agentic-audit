@@ -110,12 +110,12 @@ Percorso fisso **su Hermes**: `$HOME/.audit-scripts/container/`
 
 | File | SHA256 atteso |
 |---|---|
-| `Containerfile` | `9d528e6c6c4d17c2aa95f201ad5ef6c2cadb70e0bfc0fc10e00f5cf549826796` |
+| `Containerfile` | `5e36875657866eab1bd60af5ee05845e58eafb309eee2c9ae588aba170eea1f4` |
 | `entrypoint.sh` | `497ac4565d4f90d8b6a280e457f8c59f268108331aec3894839e38dc3a6c2d6e` |
 | `check-templates.sh` | `6c078a2334fa242d25d1ec8064d0dcc1ad4f97661237eac8d283c1e575c2d0f8` |
 | `run-audit-container.sh` | `5fd72a81b3a45aa58f1b317bc378408ee395d15b7cdbc72a2fe21b71c3a40177` |
 
-Commit pin per il pull di questi quattro: `266072c08570127707fb468789549c11430d782d`
+Commit pin per il pull di questi quattro: `fac70805041fb99ddaac227c8deb8896f57d33c7`
 
 **Cosa fa ciascuno:**
 
@@ -184,7 +184,7 @@ sha256sum "<percorso>/<file>" 2>/dev/null
 "$HELPER_DIR/vm-exec.sh" 'sha256sum "$HOME/.audit-scripts/<file>" 2>/dev/null'
 ```
 
-b. **Se il file è assente**: notifica chiaramente che non è presente e che può essere recuperato dalla repo pubblica del progetto (`https://github.com/gabriele1701/Agentic-audit`), al commit pin che gli corrisponde (vedi le tabelle sopra: `5d54bfb...` per `vm-exec.sh` e per lo script di backup, `d4d3f52...` per gli script host, `266072c...` per i file container). Spiega che farai un pull via `curl` da quella fonte. Chiedi conferma esplicita prima di procedere.
+b. **Se il file è assente**: notifica chiaramente che non è presente e che può essere recuperato dalla repo pubblica del progetto (`https://github.com/gabriele1701/Agentic-audit`), al commit pin che gli corrisponde (vedi le tabelle sopra: `5d54bfb...` per `vm-exec.sh` e per lo script di backup, `d4d3f52...` per gli script host, `fac7080...` per i file container). Spiega che farai un pull via `curl` da quella fonte. Chiedi conferma esplicita prima di procedere.
 
    Solo dopo conferma, esegui — **sulla macchina giusta**, e con il commit pin e il percorso corretti per quella pipeline:
 
@@ -207,10 +207,10 @@ b. **Se il file è assente**: notifica chiaramente che non è presente e che pu�
    # il chmod e' concatenato al curl e non va separato, altrimenti il file
    # resta a 644 e la pipeline fallisce con "Permission denied" (exit 126)
    mkdir -p "$CONTAINER_DIR"
-   curl -fsSL "https://raw.githubusercontent.com/gabriele1701/Agentic-audit/266072c08570127707fb468789549c11430d782d/container/<script>" -o "$CONTAINER_DIR/<script>" && chmod +x "$CONTAINER_DIR/<script>"
+   curl -fsSL "https://raw.githubusercontent.com/gabriele1701/Agentic-audit/fac70805041fb99ddaac227c8deb8896f57d33c7/container/<script>" -o "$CONTAINER_DIR/<script>" && chmod +x "$CONTAINER_DIR/<script>"
 
    # il Containerfile a parte: non e' eseguibile, nessun chmod
-   curl -fsSL "https://raw.githubusercontent.com/gabriele1701/Agentic-audit/266072c08570127707fb468789549c11430d782d/container/Containerfile" -o "$CONTAINER_DIR/Containerfile"
+   curl -fsSL "https://raw.githubusercontent.com/gabriele1701/Agentic-audit/fac70805041fb99ddaac227c8deb8896f57d33c7/container/Containerfile" -o "$CONTAINER_DIR/Containerfile"
 ```
 
    Il `curl` degli script host gira **sulla VM**: serve quindi che la VM abbia accesso a internet. Se non ce l'ha, il pull fallisce e l'utente deve depositare i file a mano — NON ripiegare sul depositarli su Hermes (guardrail 3).
