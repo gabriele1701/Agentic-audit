@@ -246,7 +246,7 @@ Dall'ambiente dove usi Hermes (es. la tua WSL):
 
 ```bash
 mkdir -p ~/.hermes/skills/audit
-curl -fsSL "https://raw.githubusercontent.com/gabriele1701/Agentic-audit/v2.2/SKILL.md" -o ~/.hermes/skills/audit/SKILL.md
+curl -fsSL "https://raw.githubusercontent.com/gabriele1701/Agentic-audit/v2.2.1/SKILL.md" -o ~/.hermes/skills/audit/SKILL.md
 ```
 
 Non serve copiare nessuno script: la skill si occupa lei stessa di depositarli al primo utilizzo, sulla macchina giusta per ciascuno (vedi sotto).
@@ -336,7 +336,7 @@ I requisiti di contesto e i tempi misurati sulla v1.0 erano: minimo 90k token, r
 
 | Riferimento | Punta a |
 |---|---|
-| `SKILL.md` | tag `v2.2` |
+| `SKILL.md` | tag `v2.2.1` |
 | `helper/` (accesso alla VM) | commit `5d54bfb` |
 | `scripts/` (pipeline host) | commit `d4d3f52` |
 | `backup/` | commit `5d54bfb` |
