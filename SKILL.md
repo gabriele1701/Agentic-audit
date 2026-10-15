@@ -394,14 +394,28 @@ I due file sono:
 
 **Regole di composizione — valgono per TE, non vanno copiate nel report.** Il blocco che segue e' lo scheletro del file: riproduci le intestazioni e sostituisci ogni `<segnaposto>` con il contenuto. Nel file prodotto non deve comparire nessuna frase di queste regole, nessuna delle parentesi `<...>`, e nessun riferimento a questo elenco.
 
-1. **La severita' la decide il tool, non tu.** Usa l'etichetta che lo strumento stesso emette (i warning di Lynis, le severity di Trivy e debsecan, le segnalazioni di chkrootkit/rkhunter). In "Problemi critici" vanno SOLO i finding marcati dal tool al suo livello piu' grave; tutti gli altri vanno in "Miglioramenti consigliati". Per ciascun finding: descrizione, tool di origine, severita' con l'etichetta letterale del tool, riferimento alla sezione corrispondente dei log grezzi (es. "vedi raw-logs.md, sezione Lynis").
-2. **Non promuovere di livello.** Se un finding ti sembra grave ma il tool lo marca a livello inferiore, resta tra i miglioramenti: segnalalo li'.
+1. **La destinazione di un finding la decide questa tabella, non tu.** Ogni riga di finding che riporti ha un'etichetta letterale nell'output del tool: la tabella dice in quale sezione del report va. Non c'e' niente da valutare.
+
+| Tool | → Problemi critici | → Miglioramenti consigliati | → Note informative |
+|---|---|---|---|
+| lynis | righe della sezione `Warnings` | righe della sezione `Suggestions` | sezioni informative, `Hardening index`, suggerimenti finali |
+| trivy | `CRITICAL`, `HIGH` | `MEDIUM`, `LOW` | `UNKNOWN` |
+| nmap | *(nessuna: non emette severita')* | *(nessuna)* | porte, servizi e versioni rilevati, elencati letteralmente |
+| debsecan | CVE marcati `high urgency` | ogni altro CVE elencato | righe di intestazione e di conteggio |
+| chkrootkit | righe `INFECTED` | righe `Warning` | `not infected`, `not found`, `nothing found` |
+| rkhunter | riga di sintesi `Possible rootkits:` con valore maggiore di 0 | righe `Warning:` | `Not found`, `OK`, `Skipped`, sintesi finale |
+
+   **Un'etichetta che non compare in questa tabella non si mappa a intuito**: riportala sotto "Note informative" con l'etichetta letterale e scrivi che non e' classificata.
+
+   Per ciascun finding: descrizione, tool di origine, etichetta letterale del tool, riferimento alla sezione corrispondente dei log grezzi (es. "vedi raw-logs.md, sezione Lynis").
+2. **Non promuovere di livello.** Se un finding ti sembra grave ma la tabella lo manda tra i miglioramenti, resta li'. Vale anche al contrario: non declassare.
 3. **Non riformulare la natura di un finding.** Non etichettarlo "obsoleto" o "debole" se il tool non lo dice.
 4. **Attribuisci le opinioni editoriali del tool.** Quando il giudizio non e' un fatto tecnico verificabile, scrivi che e' del tool, non presentarlo come conclusione del report.
-5. **Riporta tutti i finding di un livello, non un campione.**
-6. **Non fermarti alle sezioni dei finding.** Leggi anche le parti generali, di sistema e di nota dell'output (p.es. le sezioni informative e i suggerimenti finali di Lynis): contengono contesto e riferimenti a CVE specifici che altrimenti vanno persi.
+5. **Riporta tutti i finding di un livello, non un campione.** Unica eccezione, per leggibilita': se un tool produce piu' di 20 finding nella stessa sezione, riporta i primi 20 nell'ordine in cui compaiono nell'output e aggiungi una riga "N finding totali a questo livello, elenco completo in raw-logs" con il numero esatto. Mai un campione silenzioso.
+6. **Le note informative vanno RIPORTATE, non solo lette.** Le parti generali, di sistema e di nota dell'output (sezioni informative e suggerimenti finali di Lynis, output di nmap, righe `UNKNOWN` di trivy) contengono contesto e riferimenti a CVE specifici che non compaiono negli elenchi di finding. Vanno **trascritte** nella sezione "Note informative e riferimenti CVE", verbatim quando sono brevi. Se nell'output compare un identificativo `CVE-...` che non e' gia' in un finding, nel report ci deve essere: non esistono CVE letti e non riportati.
 7. **Zero finding non significa "nessun problema".** Un tool interrotto, saltato su deroga, o che non ha potuto esaminare cio' che doveva (database delle vulnerabilita' non scaricabile, path non accessibile) non ha valutato niente in quell'area: scrivi "non valutato", mai assenza di problemi. Vale **anche con exit code 0**.
-8. **Sintesi e "Tool non eseguiti o interrotti" non devono smentirsi.** La sintesi non deve dire ne' far intendere piu' di quanto i `.raw` dimostrino.
+8. **Nessun giudizio sintetico che il tool non stampi.** Un rating, un voto o una valutazione complessiva si riportano **solo** se compaiono come riga letterale nel `.raw` (p.es. `Hardening index` di Lynis). Se non c'e', il campo dice "non emesso". E' VIETATO dedurre un rating dall'exit code, dal numero di finding o dalla loro gravita': un exit code e' un exit code, si riporta come numero e non si traduce in un giudizio.
+9. **Sintesi, "Note informative" e "Tool non eseguiti o interrotti" non devono smentirsi.** La sintesi non deve dire ne' far intendere piu' di quanto i `.raw` dimostrino.
 
 ```markdown
 # Report di Audit di Sicurezza (host) — <hostname VM>
@@ -409,16 +423,20 @@ I due file sono:
 **Data e ora di esecuzione:** <data e ora ISO, inizio e fine stage>
 **Host target:** <IP/host SSH>
 **Backup pre-audit:** <snapshot restic ID e modo usato, dal passo 1a — oppure "NON ESEGUITO" con il motivo esatto e la nota che l'utente ha dato permesso esplicito di procedere senza>
-**Tool eseguiti:** <elenco con stato, ricavato dal manifest: completato / interrotto / saltato su deroga utente>
+**Tool eseguiti:** <elenco con stato ed exit code letterale, ricavato dal manifest: completato / interrotto / saltato su deroga utente>
+**Valutazioni complessive emesse dai tool:** <per ogni tool, la riga di rating letterale presente nel suo `.raw` (p.es. l'`Hardening index` di Lynis); per i tool che non ne stampano nessuna, "non emesso">
 
 ## Sintesi esecutiva
 <3-5 righe sullo stato generale, solo da cio' che i file `.raw` dimostrano>
 
 ## Problemi critici
-<i finding marcati dal tool al suo livello piu' grave, uno per voce; se non ce ne sono, "Nessun finding al livello piu' grave dei tool eseguiti">
+<i finding che la tabella della regola 1 manda qui, uno per voce; se non ce ne sono, "Nessun finding nelle categorie classificate come critiche dalla tabella">
 
 ## Miglioramenti consigliati
-<i finding marcati a livelli inferiori, stesso formato>
+<i finding che la tabella della regola 1 manda qui, stesso formato>
+
+## Note informative e riferimenti CVE
+<il contenuto delle parti informative dell'output e ogni CVE citato fuori dai finding, con il tool di origine; qui va anche l'inventario prodotto da nmap; se l'output non ne contiene, "Nessuna nota informativa negli output raccolti">
 
 ## Tool non eseguiti o interrotti
 <elenco con il motivo esatto, dal manifest o dalla conversazione — non generico — e cosa resta quindi non valutato>
@@ -431,7 +449,6 @@ I due file sono:
 **Data e ora di esecuzione:** <data e ora ISO>
 
 ## Lynis
-Comando eseguito: `...` (vedi "Cosa fa ciascuno" sopra)
 Output integrale: [contenuto letterale di lynis.raw, copiato senza modifiche]
 
 ## Trivy
@@ -455,14 +472,25 @@ Questi file sono **indipendenti** da quelli del passo 3: non riassumere qui i fi
 
 **Regole di composizione — valgono per TE, non vanno copiate nel report.** Il blocco che segue e' lo scheletro del file: riproduci le intestazioni e sostituisci ogni `<segnaposto>` con il contenuto. Nel file prodotto non deve comparire nessuna frase di queste regole, nessuna delle parentesi `<...>`, e nessun riferimento a questo elenco.
 
-1. **La severita' la decide il tool, non tu.** Usa l'etichetta che lo strumento stesso emette (`[fail]`/`[warn]` di ssh-audit, le severity di nuclei, le valutazioni di testssl). In "Problemi critici" vanno SOLO i finding marcati dal tool al suo livello piu' grave; tutti gli altri vanno in "Miglioramenti consigliati". Per ciascun finding: descrizione, tool di origine, severita' con l'etichetta letterale del tool, riferimento alla sezione corrispondente dei log grezzi (es. "vedi container-raw-logs.md, sezione ssh-audit").
-2. **Non promuovere di livello.** Se un finding ti sembra grave ma il tool lo marca a livello inferiore, resta tra i miglioramenti: segnalalo li'.
+1. **La destinazione di un finding la decide questa tabella, non tu.** Ogni riga di finding che riporti ha un'etichetta letterale nell'output del tool: la tabella dice in quale sezione del report va. Non c'e' niente da valutare.
+
+| Tool | → Problemi critici | → Miglioramenti consigliati | → Note informative |
+|---|---|---|---|
+| ssh-audit | `[fail]` | `[warn]` | `[info]`, righe `(gen)` e `(nfo)` |
+| testssl | `CRITICAL`, `HIGH` | `MEDIUM`, `LOW` | `INFO`, `OK`, `Overall Grade`, note finali |
+| nuclei | `[critical]`, `[high]` | `[medium]`, `[low]` | `[info]`, `[unknown]` |
+
+   **Un'etichetta che non compare in questa tabella non si mappa a intuito**: riportala sotto "Note informative" con l'etichetta letterale e scrivi che non e' classificata.
+
+   Per ciascun finding: descrizione, tool di origine, etichetta letterale del tool, riferimento alla sezione corrispondente dei log grezzi (es. "vedi container-raw-logs.md, sezione ssh-audit").
+2. **Non promuovere di livello.** Se un finding ti sembra grave ma la tabella lo manda tra i miglioramenti, resta li'. Vale anche al contrario: non declassare.
 3. **Non riformulare la natura di un finding.** Se il tool raccomanda di sostituire un algoritmo per il modo in cui e' usato (p.es. i MAC non-ETM a favore delle varianti `-etm@openssh.com`), riportalo cosi': non etichettarlo "obsoleto" o "debole" se il tool non lo dice.
 4. **Attribuisci le opinioni editoriali del tool.** Quando il giudizio non e' un fatto tecnico verificabile (p.es. ssh-audit sulle curve NIST "sospettate di backdoor"), scrivi che e' del tool, non presentarlo come conclusione del report.
-5. **Riporta tutti i finding di un livello, non un campione.** Se il tool marca tre algoritmi `[fail]`, nel report compaiono tutti e tre.
-6. **Non fermarti alle sezioni degli algoritmi.** Leggi anche le sezioni generali e di nota dell'output (`(gen)` e `(nfo)` di ssh-audit, le note finali di testssl): contengono informazioni di contesto e riferimenti a CVE specifici — p.es. la nota su Terrapin (CVE-2023-48795) e su quali cifrari lascerebbero comunque un peer non aggiornato vulnerabile, o lo stato della compressione — che non compaiono negli elenchi di algoritmi e che altrimenti vanno perse.
+5. **Riporta tutti i finding di un livello, non un campione.** Se il tool marca tre algoritmi `[fail]`, nel report compaiono tutti e tre. Unica eccezione, per leggibilita': se un tool produce piu' di 20 finding nella stessa sezione, riporta i primi 20 nell'ordine in cui compaiono nell'output e aggiungi una riga "N finding totali a questo livello, elenco completo in raw-logs" con il numero esatto. Mai un campione silenzioso.
+6. **Le note informative vanno RIPORTATE, non solo lette.** Le sezioni generali e di nota dell'output (`(gen)` e `(nfo)` di ssh-audit, le note finali di testssl) contengono contesto e riferimenti a CVE specifici — p.es. la nota su Terrapin (CVE-2023-48795) e su quali cifrari lascerebbero comunque vulnerabile un peer non aggiornato, o lo stato della compressione — che non compaiono negli elenchi di algoritmi. Vanno **trascritte** nella sezione "Note informative e riferimenti CVE", verbatim quando sono brevi. Se nell'output compare un identificativo `CVE-...` che non e' gia' in un finding, nel report ci deve essere: non esistono CVE letti e non riportati.
 7. **Zero finding non significa "nessun problema".** Se un tool non ha raggiunto il servizio (connessione rifiutata, timeout, porta chiusa, schema senza nulla in ascolto) non ha valutato niente: scrivi "non valutato", mai assenza di problemi. Vale **anche con exit code 0**: nuclei puntato su una porta chiusa esce 0 con zero finding, e quello e' un esito vuoto, non rassicurante.
-8. **Sintesi e "Limiti" non devono smentirsi.** Ogni "non valutato" della sintesi va ripreso nei limiti, e la sintesi non deve dire ne' far intendere piu' di quanto i `.raw` dimostrino.
+8. **Nessun giudizio sintetico che il tool non stampi.** Un rating, un voto o una valutazione complessiva si riportano **solo** se compaiono come riga letterale nel `.raw` (testssl stampa un `Overall Grade`; ssh-audit e nuclei non stampano nulla di equivalente). Se non c'e', il campo dice "non emesso". E' VIETATO dedurre un rating dall'exit code, dal numero di finding o dalla loro gravita': l'exit code di ssh-audit e' un exit code, si riporta come numero e non si traduce in un giudizio.
+9. **Sintesi, "Note informative" e "Limiti" non devono smentirsi.** Ogni "non valutato" della sintesi va ripreso nei limiti, e la sintesi non deve dire ne' far intendere piu' di quanto i `.raw` dimostrino.
 
 ```markdown
 # Report di Audit di Sicurezza (container) — <target>
@@ -473,15 +501,19 @@ Questi file sono **indipendenti** da quelli del passo 3: non riassumere qui i fi
 **Versioni dei tool:** <contenuto letterale di versions.txt>
 **Stato dei nuclei-templates:** <esito del passo 2b: aggiornato / indietro di N release e usato comunque / aggiornato in questa sessione>
 **Tool eseguiti:** <i tre tool con il rispettivo exit code dal manifest e la classificazione concordata con l'utente al passo 2c>
+**Valutazioni complessive emesse dai tool:** <per ogni tool, la riga di rating letterale presente nel suo `.raw` (p.es. l'`Overall Grade` di testssl); per i tool che non ne stampano nessuna, "non emesso">
 
 ## Sintesi esecutiva
 <3-5 righe sulla superficie esposta del target, solo da cio' che i file `.raw` dimostrano>
 
 ## Problemi critici
-<i finding marcati dal tool al suo livello piu' grave, uno per voce; se non ce ne sono, "Nessun finding al livello piu' grave dei tool eseguiti">
+<i finding che la tabella della regola 1 manda qui, uno per voce; se non ce ne sono, "Nessun finding nelle categorie classificate come critiche dalla tabella">
 
 ## Miglioramenti consigliati
-<i finding marcati a livelli inferiori, stesso formato>
+<i finding che la tabella della regola 1 manda qui, stesso formato>
+
+## Note informative e riferimenti CVE
+<il contenuto delle sezioni informative e di nota dell'output e ogni CVE citato fuori dai finding, con il tool di origine; se l'output non ne contiene, "Nessuna nota informativa negli output raccolti">
 
 ## Esiti da interpretare
 <per ogni tool con exit code diverso da 0: esito letterale e classificazione indicata dall'utente al passo 2c — nessuna classificazione decisa da te>
@@ -514,6 +546,8 @@ Output integrale: [contenuto letterale di ssh-audit.raw, copiato senza modifiche
 ### Regole comuni ai report (passi 3 e 4)
 
 **Report elaborati**: ogni riga deve essere riconducibile a un output effettivamente presente nei file `.raw`. NESSUNA interpretazione, raccomandazione generica o dettaglio che non provenga dall'output reale raccolto in questa sessione. Non attribuire a un tool un finding prodotto da un altro.
+
+**Questa skill non e' una fonte per i report.** Comandi, versioni, opzioni e descrizioni dei tool si riportano solo se compaiono nei file raccolti (`.raw`, `manifest.txt`, `versions.txt`): il `.raw` di ciascun tool della pipeline container ne porta in testa il comando effettivo, mentre quelli della pipeline host non lo contengono e quindi non va riportato. NON ricopiare nel report nulla preso dal testo di questa skill — una riga vera ma non dimostrata dai file raccolti ha lo stesso difetto di una inventata.
 
 **Log grezzi**: sono una trascrizione letterale del contenuto dei file `.raw`, non un riassunto. Copia il contenuto, non descriverlo.
 
