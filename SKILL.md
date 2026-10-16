@@ -47,7 +47,9 @@ La parte meccanica di entrambe le pipeline (verifica presenza tool, installazion
     - **Pipeline container: i tre tool girano tutti, sempre.** Non è una scelta: il container è un singolo `podman run` effimero, non c'è modo di fermarsi a metà e chiedere conferma. Al termine riporti l'exit code di ciascuno **letteralmente** dal manifest e chiedi all'utente come interpretare qualunque valore diverso da 0 **prima** di comporre il report. In particolare NON classificare da solo una porta chiusa o non raggiungibile come "tool fallito": è un risultato dell'audit, non un guasto, e la distinzione la fa l'utente.
 11. **NON CREARE MAI FILE DIVERSI DA QUELLI ESPLICITAMENTE ELENCATI IN QUESTA SKILL.** Gli unici file che possono esistere al termine dell'audit sono: i nove script di supporto, `vm-exec.sh` incluso (depositati, non scritti da te), i file `.raw`, `manifest.txt` e `versions.txt` nelle cartelle di output (generati dagli script, non da te), il repository restic su Hermes (gestito da `backup-target.sh`, non da te), e i file di report finali (passi 3 e 4). NON creare cartelle, bozze, file temporanei, note, o qualsiasi altro artefatto "per aiutarti a comporre il report".
 12. **LA PASSWORD DEL BACKUP NON SI SCRIVE E NON SI RIPETE.** La password del repository restic te la fornisce l'utente al passo 1a. Usala **solo** per quella singola invocazione dello script. NON ripeterla in chat, NON riportarla nel report, NON scriverla in un file, NON salvarla per riusarla in un passo successivo. Se serve di nuovo, richiedila.
-13. **IL BACKUP NON RIPRISTINA NULLA, MAI.** Questa skill crea snapshot e non li ripristina in nessun caso, nemmeno se l'audit va male, nemmeno se l'utente lo chiede durante l'audit: un ripristino è una modifica del target, e questa skill è solo di analisi. Se l'utente chiede un ripristino, spiega che va fatto da lui con `restic` direttamente, fuori da questa skill. Allo stesso modo NON cancellare, NON fare `forget`, NON fare `prune` di snapshot esistenti: la pulizia del repository è una sua azione manuale.
+13. **PARLA ALL'UTENTE NELLA SUA LINGUA.** Usa la lingua in cui l'utente ti si rivolge, dal primo messaggio fino alla chiusura, senza cambiarla a meta' audit. Vale per la narrazione, le domande di conferma, i riepiloghi e il contenuto dei report. Restano in lingua originale soltanto gli output dei tool, le etichette letterali dei finding e i nomi dei file: quelli si citano come sono, non si traducono.
+14. **COMPONI I REPORT DA SOLO, LEGGENDO I FILE.** La lettura dei `.raw`, del `manifest.txt` e del `versions.txt`, la loro sintesi e la stesura dei report sono compiti **tuoi**. NON delegare a un altro agente, a un sottoprocesso o a uno strumento di riassunto nessuna di queste operazioni, nemmeno in parte, nemmeno per un singolo output lungo. Un riassunto prodotto da un intermediario non e' il `.raw`: se lo usi, stai scrivendo il report su una fonte che non hai letto, e le regole di composizione dei passi 3 e 4 non sono piu' verificabili. Se un output e' troppo lungo per essere letto in una volta, leggilo a pezzi.
+15. **IL BACKUP NON RIPRISTINA NULLA, MAI.** Questa skill crea snapshot e non li ripristina in nessun caso, nemmeno se l'audit va male, nemmeno se l'utente lo chiede durante l'audit: un ripristino è una modifica del target, e questa skill è solo di analisi. Se l'utente chiede un ripristino, spiega che va fatto da lui con `restic` direttamente, fuori da questa skill. Allo stesso modo NON cancellare, NON fare `forget`, NON fare `prune` di snapshot esistenti: la pulizia del repository è una sua azione manuale.
 
 ## Script di supporto
 
@@ -394,23 +396,31 @@ I due file sono:
 
 **Regole di composizione — valgono per TE, non vanno copiate nel report.** Il blocco che segue e' lo scheletro del file: riproduci le intestazioni e sostituisci ogni `<segnaposto>` con il contenuto. Nel file prodotto non deve comparire nessuna frase di queste regole, nessuna delle parentesi `<...>`, e nessun riferimento a questo elenco.
 
-1. **La destinazione di un finding la decide questa tabella, non tu.** Ogni riga di finding che riporti ha un'etichetta letterale nell'output del tool: la tabella dice in quale sezione del report va. Non c'e' niente da valutare.
+1. **La destinazione di un finding la decide l'etichetta che il tool emette, non tu.** Ogni riga di finding che riporti porta un'etichetta letterale nell'output: lo schema qui sotto dice in quale sezione del report va. Non c'e' niente da valutare.
 
 | Tool | → Problemi critici | → Miglioramenti consigliati | → Note informative |
 |---|---|---|---|
-| lynis | righe della sezione `Warnings` | righe della sezione `Suggestions` | sezioni informative, `Hardening index`, suggerimenti finali |
+| lynis | le voci elencate sotto l'intestazione `Warnings` del riepilogo finale | le voci elencate sotto l'intestazione `Suggestions` | sezioni informative, `Hardening index`, suggerimenti finali, **e tutte le righe che iniziano con `WARNING:`** |
 | trivy | `CRITICAL`, `HIGH` | `MEDIUM`, `LOW` | `UNKNOWN` |
 | nmap | *(nessuna: non emette severita')* | *(nessuna)* | porte, servizi e versioni rilevati, elencati letteralmente |
 | debsecan | CVE marcati `high urgency` | ogni altro CVE elencato | righe di intestazione e di conteggio |
 | chkrootkit | righe `INFECTED` | righe `Warning` | `not infected`, `not found`, `nothing found` |
 | rkhunter | riga di sintesi `Possible rootkits:` con valore maggiore di 0 | righe `Warning:` | `Not found`, `OK`, `Skipped`, sintesi finale |
 
-   **Un'etichetta che non compare in questa tabella non si mappa a intuito**: riportala sotto "Note informative" con l'etichetta letterale e scrivi che non e' classificata.
+   **Lynis — `Warnings` non e' `WARNING:`.** Il `.raw` di Lynis contiene due cose diverse che si somigliano, e confonderle manda avvisi sui tempi di esecuzione dei test in cima ai problemi critici:
+   - le voci elencate **sotto l'intestazione `Warnings`** del riepilogo finale riguardano lo stato del **sistema**: sono quelle, e solo quelle, che vanno nei critici;
+   - le righe che **iniziano con `WARNING:`** appartengono al log di esecuzione e riguardano l'andamento del **test**, non la macchina (p.es. `WARNING: Test DEB-0001 had a long execution: 31.8 seconds`): sono note informative, mai critici.
 
-   **La tabella non entra nel report.** Non riprodurla, non riassumerla sotto le intestazioni, non citarla ("dalla tabella: ...", "la tabella manda qui ..."): e' uno strumento tuo, e il lettore vede soltanto la sezione in cui ciascun finding e' finito. Non scrivere nemmeno voci del tipo "nessun finding per il tool X in questa sezione": una sezione elenca cio' che contiene, e se e' vuota lo dice una volta sola con la frase dello scheletro.
+   Il discriminante e' il prefisso, non la parola: una voce della sezione `Warnings` non comincia con `WARNING:`, sta elencata sotto quell'intestazione. Lo stesso criterio vale al contrario per `Suggestions` e le righe `SUGGESTION:`. Prima di chiudere la sezione "Problemi critici", rileggine la prima voce: se parla di quanto ci ha messo un test, hai confuso le due.
+
+   **Un'etichetta che non compare qui sopra non si mappa a intuito**: riportala sotto "Note informative" con l'etichetta letterale e scrivi che non e' classificata.
+
+   **Nel report il criterio non si nomina: si applica.** Lo schema qui sopra e' uno strumento tuo e resta in questa skill. Nel file che produci non deve comparire nessuna parola su *come* un finding sia finito dove sta: ne' riprodotto, ne' riassunto, ne' citato di sfuggita, sotto nessuna intestazione e in nessuna forma, compreso un rimando a questa skill o alle sue regole. Una sezione non si descrive: si elencano le voci che contiene, e basta. Per una sezione senza voci scrivi **soltanto** la frase indicata nello scheletro, una volta sola, senza aggiungere quali tool non hanno prodotto nulla.
+
+   Se una frase che stai per scrivere nel report spiega la classificazione invece di esporre un finding, non va nel file: cancellala, non riformularla.
 
    Per ciascun finding: descrizione, tool di origine, etichetta letterale del tool, riferimento alla sezione corrispondente dei log grezzi (es. "vedi raw-logs.md, sezione Lynis").
-2. **Non promuovere di livello.** Se un finding ti sembra grave ma la tabella lo manda tra i miglioramenti, resta li'. Vale anche al contrario: non declassare.
+2. **Non promuovere di livello.** Se un finding ti sembra grave ma la sua etichetta lo manda tra i miglioramenti, resta li'. Vale anche al contrario: non declassare.
 3. **Non riformulare la natura di un finding.** Non etichettarlo "obsoleto" o "debole" se il tool non lo dice.
 4. **Attribuisci le opinioni editoriali del tool.** Quando il giudizio non e' un fatto tecnico verificabile, scrivi che e' del tool, non presentarlo come conclusione del report.
 5. **Riporta tutti i finding di un livello, non un campione.** Unica eccezione, per leggibilita': se un tool produce piu' di 20 finding nella stessa sezione, riporta i primi 20 nell'ordine in cui compaiono nell'output e aggiungi una riga "N finding totali a questo livello, elenco completo in raw-logs" con il numero esatto. Mai un campione silenzioso.
@@ -420,6 +430,8 @@ I due file sono:
 8. **Nessun giudizio sintetico che il tool non stampi.** Un rating, un voto o una valutazione complessiva si riportano **solo** se compaiono come riga letterale nel `.raw` (p.es. `Hardening index` di Lynis). Se non c'e', il campo dice "non emesso". E' VIETATO dedurre un rating dall'exit code, dal numero di finding o dalla loro gravita': un exit code e' un exit code, si riporta come numero e non si traduce in un giudizio. **Il divieto vale anche per un'interpretazione fornita dall'utente**: un giudizio che il tool non stampa non entra nel file nemmeno quando non e' tuo. Dell'utente si riporta la **natura** dell'esito (risultato d'audit o guasto d'esecuzione, p.es. la deroga su un tool saltato), non la traduzione di un numero in un voto.
 9. **Sintesi, "Note informative" e "Tool non eseguiti o interrotti" non devono smentirsi.** La sintesi non deve dire ne' far intendere piu' di quanto i `.raw` dimostrino.
    **Controllo finale obbligatorio prima di scrivere il file:** rileggi la sintesi una frase per volta e, per ogni numero, nome e qualificatore che contiene ("tutte", "nessuna", "la totalita'", "solo", "predominante"), verifica che compaia identico nella sezione da cui proviene. Se le due versioni divergono — p.es. la sintesi dice che nessun finding ha una versione fissa e la sezione critici ne elenca con versione fissa — **una delle due e' falsa**: torna al `.raw`, stabilisci quale, e correggi quella. Non mediare tra le due e non ammorbidire la sintesi per farcela stare.
+10. **Ogni conteggio si ricalcola.** Un numero non si ricopia a occhio e non si deduce: prima di scriverlo nel report, sommalo dalle cifre che compaiono nell'output e verifica che il totale torni. Lo stesso valore e' spesso stampato in piu' punti del `.raw` (riga `Total`, intestazioni di sezione, conteggi parziali): confrontali tra loro prima di sceglierne uno.
+    **Non attribuire a un tool un'incoerenza, un errore o un difetto senza dimostrarlo.** Se la tua somma non torna con un totale dichiarato dal tool, il primo sospetto e' la tua lettura, non il tool: ricontrolla di aver letto le cifre giuste. Per scrivere nel report che l'incoerenza e' del tool devi citarne **verbatim le due righe di output che si contraddicono**, nella stessa voce in cui lo affermi. Se non puoi citarle, l'affermazione non entra nel file: riporta i numeri come li trovi e fermati li'.
 
 ```markdown
 # Report di Audit di Sicurezza (host) — <hostname VM>
@@ -434,13 +446,13 @@ I due file sono:
 <3-5 righe sullo stato generale, solo da cio' che i file `.raw` dimostrano>
 
 ## Problemi critici
-<i finding che la tabella della regola 1 manda qui, uno per voce; se non ce ne sono, "Nessun finding nelle categorie classificate come critiche dalla tabella">
+<le voci sotto l'intestazione `Warnings` di Lynis, i finding `CRITICAL` e `HIGH` di trivy, i CVE `high urgency` di debsecan, le righe `INFECTED` di chkrootkit e la riga `Possible rootkits:` di rkhunter se maggiore di zero — una per voce, nel formato della regola 1; se non ce n'e' nessuna, la sola riga: Nessun finding di questo livello negli output raccolti.>
 
 ## Miglioramenti consigliati
-<i finding che la tabella della regola 1 manda qui, stesso formato>
+<le voci sotto l'intestazione `Suggestions` di Lynis, i finding `MEDIUM` e `LOW` di trivy, gli altri CVE di debsecan, le righe `Warning` di chkrootkit e le righe `Warning:` di rkhunter — stesso formato; se non ce n'e' nessuna, la sola riga: Nessun finding di questo livello negli output raccolti.>
 
 ## Note informative e riferimenti CVE
-<il contenuto delle parti informative dell'output e ogni CVE citato fuori dai finding, con il tool di origine; qui va anche l'inventario prodotto da nmap; se l'output non ne contiene, "Nessuna nota informativa negli output raccolti">
+<il contenuto delle parti informative dell'output e ogni CVE citato fuori dai finding, con il tool di origine; qui vanno anche l'inventario prodotto da nmap e le righe `WARNING:` del log di esecuzione di Lynis; se l'output non ne contiene, "Nessuna nota informativa negli output raccolti">
 
 ## Tool non eseguiti o interrotti
 <elenco con il motivo esatto, dal manifest o dalla conversazione — non generico — e cosa resta quindi non valutato>
@@ -476,7 +488,7 @@ Questi file sono **indipendenti** da quelli del passo 3: non riassumere qui i fi
 
 **Regole di composizione — valgono per TE, non vanno copiate nel report.** Il blocco che segue e' lo scheletro del file: riproduci le intestazioni e sostituisci ogni `<segnaposto>` con il contenuto. Nel file prodotto non deve comparire nessuna frase di queste regole, nessuna delle parentesi `<...>`, e nessun riferimento a questo elenco.
 
-1. **La destinazione di un finding la decide questa tabella, non tu.** Ogni riga di finding che riporti ha un'etichetta letterale nell'output del tool: la tabella dice in quale sezione del report va. Non c'e' niente da valutare.
+1. **La destinazione di un finding la decide l'etichetta che il tool emette, non tu.** Ogni riga di finding che riporti porta un'etichetta letterale nell'output: lo schema qui sotto dice in quale sezione del report va. Non c'e' niente da valutare.
 
 | Tool | → Problemi critici | → Miglioramenti consigliati | → Note informative |
 |---|---|---|---|
@@ -484,12 +496,14 @@ Questi file sono **indipendenti** da quelli del passo 3: non riassumere qui i fi
 | testssl | `CRITICAL`, `HIGH` | `MEDIUM`, `LOW` | `INFO`, `OK`, `Overall Grade`, note finali |
 | nuclei | `[critical]`, `[high]` | `[medium]`, `[low]` | `[info]`, `[unknown]` |
 
-   **Un'etichetta che non compare in questa tabella non si mappa a intuito**: riportala sotto "Note informative" con l'etichetta letterale e scrivi che non e' classificata.
+   **Un'etichetta che non compare qui sopra non si mappa a intuito**: riportala sotto "Note informative" con l'etichetta letterale e scrivi che non e' classificata.
 
-   **La tabella non entra nel report.** Non riprodurla, non riassumerla sotto le intestazioni, non citarla ("dalla tabella: ...", "la tabella manda qui ..."): e' uno strumento tuo, e il lettore vede soltanto la sezione in cui ciascun finding e' finito. Non scrivere nemmeno voci del tipo "nessun finding per il tool X in questa sezione": una sezione elenca cio' che contiene, e se e' vuota lo dice una volta sola con la frase dello scheletro.
+   **Nel report il criterio non si nomina: si applica.** Lo schema qui sopra e' uno strumento tuo e resta in questa skill. Nel file che produci non deve comparire nessuna parola su *come* un finding sia finito dove sta: ne' riprodotto, ne' riassunto, ne' citato di sfuggita, sotto nessuna intestazione e in nessuna forma, compreso un rimando a questa skill o alle sue regole. Una sezione non si descrive: si elencano le voci che contiene, e basta. Per una sezione senza voci scrivi **soltanto** la frase indicata nello scheletro, una volta sola, senza aggiungere quali tool non hanno prodotto nulla.
+
+   Se una frase che stai per scrivere nel report spiega la classificazione invece di esporre un finding, non va nel file: cancellala, non riformularla.
 
    Per ciascun finding: descrizione, tool di origine, etichetta letterale del tool, riferimento alla sezione corrispondente dei log grezzi (es. "vedi container-raw-logs.md, sezione ssh-audit").
-2. **Non promuovere di livello.** Se un finding ti sembra grave ma la tabella lo manda tra i miglioramenti, resta li'. Vale anche al contrario: non declassare.
+2. **Non promuovere di livello.** Se un finding ti sembra grave ma la sua etichetta lo manda tra i miglioramenti, resta li'. Vale anche al contrario: non declassare.
 3. **Non riformulare la natura di un finding.** Se il tool raccomanda di sostituire un algoritmo per il modo in cui e' usato (p.es. i MAC non-ETM a favore delle varianti `-etm@openssh.com`), riportalo cosi': non etichettarlo "obsoleto" o "debole" se il tool non lo dice.
 4. **Attribuisci le opinioni editoriali del tool.** Quando il giudizio non e' un fatto tecnico verificabile (p.es. ssh-audit sulle curve NIST "sospettate di backdoor"), scrivi che e' del tool, non presentarlo come conclusione del report.
 5. **Riporta tutti i finding di un livello, non un campione.** Se il tool marca tre algoritmi `[fail]`, nel report compaiono tutti e tre. Unica eccezione, per leggibilita': se un tool produce piu' di 20 finding nella stessa sezione, riporta i primi 20 nell'ordine in cui compaiono nell'output e aggiungi una riga "N finding totali a questo livello, elenco completo in raw-logs" con il numero esatto. Mai un campione silenzioso.
@@ -500,6 +514,8 @@ Questi file sono **indipendenti** da quelli del passo 3: non riassumere qui i fi
    **Questo divieto vale in ogni punto del file, compresa la classificazione concordata al passo 2c.** Li' l'utente dichiara soltanto la **natura** di un esito diverso da zero — risultato d'audit oppure guasto d'esecuzione — ed e' solo quella che entra nel report, con le sue parole. Se l'utente aggiunge un'interpretazione del valore numerico ("3 vuol dire rating medio"), quella NON si scrive nel file: un giudizio che il tool non stampa resta vietato anche quando non e' tuo. In quel caso riporta l'exit code nudo e la natura concordata, e nient'altro.
 9. **Sintesi, "Note informative" e "Limiti" non devono smentirsi.** Ogni "non valutato" della sintesi va ripreso nei limiti, e la sintesi non deve dire ne' far intendere piu' di quanto i `.raw` dimostrino.
    **Controllo finale obbligatorio prima di scrivere il file:** rileggi la sintesi una frase per volta e, per ogni numero, nome e qualificatore che contiene ("tutte", "nessuna", "la totalita'", "solo", "predominante"), verifica che compaia identico nella sezione da cui proviene. Se le due versioni divergono — p.es. la sintesi dice che nessun finding ha una versione fissa e la sezione critici ne elenca con versione fissa — **una delle due e' falsa**: torna al `.raw`, stabilisci quale, e correggi quella. Non mediare tra le due e non ammorbidire la sintesi per farcela stare.
+10. **Ogni conteggio si ricalcola.** Un numero non si ricopia a occhio e non si deduce: prima di scriverlo nel report, sommalo dalle cifre che compaiono nell'output e verifica che il totale torni. Lo stesso valore e' spesso stampato in piu' punti del `.raw`: confrontali tra loro prima di sceglierne uno.
+    **Non attribuire a un tool un'incoerenza, un errore o un difetto senza dimostrarlo.** Se la tua somma non torna con un totale dichiarato dal tool, il primo sospetto e' la tua lettura, non il tool: ricontrolla di aver letto le cifre giuste. Per scrivere nel report che l'incoerenza e' del tool devi citarne **verbatim le due righe di output che si contraddicono**, nella stessa voce in cui lo affermi. Se non puoi citarle, l'affermazione non entra nel file: riporta i numeri come li trovi e fermati li'.
 
 ```markdown
 # Report di Audit di Sicurezza (container) — <target>
@@ -516,10 +532,10 @@ Questi file sono **indipendenti** da quelli del passo 3: non riassumere qui i fi
 <3-5 righe sulla superficie esposta del target, solo da cio' che i file `.raw` dimostrano>
 
 ## Problemi critici
-<i finding che la tabella della regola 1 manda qui, uno per voce; se non ce ne sono, "Nessun finding nelle categorie classificate come critiche dalla tabella">
+<i finding `[fail]` di ssh-audit, `CRITICAL` e `HIGH` di testssl, `[critical]` e `[high]` di nuclei — uno per voce, nel formato della regola 1; se non ce n'e' nessuno, la sola riga: Nessun finding di questo livello negli output raccolti.>
 
 ## Miglioramenti consigliati
-<i finding che la tabella della regola 1 manda qui, stesso formato>
+<i finding `[warn]` di ssh-audit, `MEDIUM` e `LOW` di testssl, `[medium]` e `[low]` di nuclei — stesso formato; se non ce n'e' nessuno, la sola riga: Nessun finding di questo livello negli output raccolti.>
 
 ## Note informative e riferimenti CVE
 <il contenuto delle sezioni informative e di nota dell'output e ogni CVE citato fuori dai finding, con il tool di origine; se l'output non ne contiene, "Nessuna nota informativa negli output raccolti">
@@ -573,6 +589,6 @@ Comunica quali file sono stati prodotti e il loro percorso completo, specificand
 
 Aggiungi un riepilogo di una riga per pipeline eseguita (numero di problemi critici trovati, eventuali tool interrotti, saltati o con esito da interpretare). Ricorda che nelle cartelle di output restano anche i file `.raw`, `manifest.txt` e — per la pipeline container — `versions.txt`: fanno parte dell'audit, non sono file in eccesso.
 
-Se è stato fatto un backup, ricorda all'utente che lo snapshot resta nel repository restic su Hermes (`$BACKUP_REPO`), insieme a quelli degli audit precedenti, e che la sua pulizia è una sua azione manuale: tu non la fai mai (guardrail 13).
+Se è stato fatto un backup, ricorda all'utente che lo snapshot resta nel repository restic su Hermes (`$BACKUP_REPO`), insieme a quelli degli audit precedenti, e che la sua pulizia è una sua azione manuale: tu non la fai mai (guardrail 15).
 
 Il container è già stato distrutto automaticamente (`podman run --rm`); l'immagine locale resta su Hermes per i run successivi. NON proporre di rimuoverla, NON proporre azioni correttive sul target né offrirti di eseguirle, NON proporre di ripristinare il backup: questa skill è SOLO di audit.
