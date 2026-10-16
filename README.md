@@ -116,32 +116,42 @@ Per liberare spazio, `restic forget` e `restic prune` sono comandi tuoi da dare 
 
 ### Per tutte le pipeline
 
-1. **Hermes Agent con backend terminal in locale.** In `~/.hermes/config.yaml`:
+1. **Hermes Agent con backend terminal in locale**, configurato in `~/.hermes/config.yaml`.
+
+   Nell'esempio qui sotto l'utente di Hermes si chiama `gabri17` e quello della VM target `auditor`: due nomi volutamente diversi, perché **le righe che riguardano la VM e quelle che riguardano Hermes sono mescolate nello stesso blocco**, ed è l'errore più facile da fare.
 
    ```yaml
    terminal:
      backend: local
-     ssh_host: <IP della VM>
-     ssh_user: <utente SSH sulla VM>
-     ssh_port: 22
-     ssh_key: '/home/<utente-hermes>/.ssh/<chiave>'
-     cwd: /home/<utente-hermes>
+     ssh_host: 192.168.72.130                        # IP della VM target
+     ssh_user: auditor                               # utente SSH SULLA VM
+     ssh_port: 2222                                  # la porta reale del TUO server SSH
+     ssh_key: '/home/gabri17/.ssh/id_ed25519_audit'  # chiave SU HERMES, percorso assoluto
+     cwd: /home/gabri17                              # directory esistente SU HERMES
    ```
 
    Oppure `hermes config set terminal.backend local`. Il perché è spiegato in "Come Hermes raggiunge le due macchine": è il presupposto su cui si regge tutto il resto.
 
-   Due dettagli che è facile sbagliare:
-   - **`cwd` deve essere una directory esistente su Hermes.** Se resta puntato alla home della VM (tipico se arrivi da un setup con backend `ssh`), *ogni* comando fallisce la `cd` iniziale, anche quelli che non c'entrano nulla con la VM.
+   Quattro dettagli che è facile sbagliare:
+   - **`cwd` deve essere una directory esistente su Hermes**, non sulla VM. Se resta puntato alla home della VM (tipico se arrivi da un setup con backend `ssh`, o se lo si copia dalla riga `ssh_user` qui sopra), *ogni* comando fallisce la `cd` iniziale, anche quelli che non c'entrano nulla con la VM.
+   - **Il percorso della chiave deve essere assoluto.** La tilde non viene espansa: `~/.ssh/id_ed25519_audit` non è un percorso valido qui, e `vm-exec.sh` si ferma con `CONFIG_ERROR` senza che sia evidente il perché. Scrivi `/home/<utente-hermes>/.ssh/...` per esteso.
+   - **`ssh_port` è la porta reale del tuo server SSH sulla VM**, non un valore fisso da lasciare com'è. Il `22` è solo il default più comune: se hai spostato la porta, qui va il tuo numero, altrimenti ogni connessione fallisce in timeout o con "Connection refused".
    - **Le chiavi `ssh_*` vanno lasciate dov'erano**, anche se il backend non le usa più: `vm-exec.sh` le legge da lì.
 
-2. **Chiave SSH verso la VM funzionante come file su Hermes**, con la pubblica corrispondente in `~/.ssh/authorized_keys` sulla VM. Deve essere **senza passphrase** o già sbloccata in un agent: le connessioni avvengono in modalità non interattiva (`BatchMode=yes`), quindi un prompt non verrebbe mostrato a nessuno e il comando fallirebbe. Verifica con:
+2. **Chiave SSH verso la VM funzionante come file su Hermes**, con la pubblica corrispondente in `~/.ssh/authorized_keys` sulla VM. Deve essere **senza passphrase** o già sbloccata in un agent: le connessioni avvengono in modalità non interattiva (`BatchMode=yes`), quindi un prompt non verrebbe mostrato a nessuno e il comando fallirebbe.
+
+   Verifica da Hermes, con **gli stessi quattro valori** che hai messo in `config.yaml`:
 
    ```bash
-   ~/.audit-scripts/helper/vm-exec.sh --show-target   # quale macchina verrà raggiunta
-   ~/.audit-scripts/helper/vm-exec.sh 'whoami'        # deve rispondere l'utente della VM
+   ssh -i /home/gabri17/.ssh/id_ed25519_audit -p 2222 \
+       -o BatchMode=yes auditor@192.168.72.130 'whoami; hostname'
    ```
 
-   Se il secondo comando risponde con l'utente di *Hermes* invece che con quello della VM, `ssh_host` sta puntando a Hermes stesso: correggilo prima di lanciare un audit, altrimenti la pipeline host analizzerebbe la macchina sbagliata.
+   `-o BatchMode=yes` non è un dettaglio: riproduce le condizioni non interattive in cui lavorerà la skill, quindi una chiave protetta da passphrase fallisce **qui**, con un errore leggibile, invece che a metà audit. Senza quell'opzione il comando ti chiederebbe la passphrase e sembrerebbe funzionare.
+
+   Cosa deve rispondere: l'utente e l'hostname **della VM**. Se rispondono quelli di Hermes, `ssh_host` sta puntando a Hermes stesso, e la pipeline host analizzerebbe la macchina sbagliata. Se invece ottieni `Permission denied (publickey)`, la chiave pubblica non è in `authorized_keys` sulla VM, o la privata è quella sbagliata.
+
+   > Questa verifica usa `ssh` direttamente di proposito. `vm-exec.sh` a questo punto **non esiste ancora** su Hermes: lo deposita la skill al primo audit.
 
 ### Per la pipeline host
 
@@ -164,11 +174,32 @@ Per liberare spazio, `restic forget` e `restic prune` sono comandi tuoi da dare 
 
    > Il file va creato **sulla VM target**, non su Hermes, e l'`<utente>` è quello SSH della VM (`ssh_user` in `config.yaml`). Su Hermes questa skill non ha bisogno di nessuna regola `sudo`.
 
-   Prima verifica i percorsi reali sulla macchina target:
+   La procedura è in **due fasi**, e l'ordine non è invertibile: le righe del sudoers contengono i percorsi assoluti dei binari, e `which` su un tool non ancora installato non restituisce nulla. Su una macchina appena installata, quindi, i tool vanno installati **prima** di poter scrivere il file.
+
+   #### Fase A — installare i tool da cui ricaverai i percorsi
+
+   Sulla VM target:
 
    ```bash
-   which lynis nmap chkrootkit rkhunter apt-get gpg tee cat
+   sudo apt-get update
+   sudo apt-get install -y lynis nmap chkrootkit rkhunter debsecan
    ```
+
+   Tre cose da sapere, perché nessuna delle tre è deducibile da sola:
+
+   - **trivy non si installa qui** e non comparirà tra i percorsi da autorizzare. Lo installa la skill, aggiungendo un repository apt dedicato, e lo **esegue senza `sudo`**: nel sudoers servono quindi solo le righe `apt-get install -y trivy`, `gpg` e `tee` che preparano quel repository. Lo stesso vale per l'esecuzione di `debsecan`, che gira senza `sudo` — lo installi in questa fase solo per non trovartelo mancante al primo audit.
+   - **Se `debsecan` non è disponibile** per la release della tua distribuzione, non è bloccante: la skill lo rileva durante l'audit e ti chiede una deroga esplicita per saltarlo.
+   - **Al primo audit la skill troverà i tool già presenti e passerà oltre**, senza installare nulla: è il comportamento atteso, non un malfunzionamento. Le righe `apt-get install` nel sudoers restano comunque necessarie, perché servono agli audit successivi e sulle macchine dove qualcosa manca davvero.
+
+   #### Fase B — ricavare i percorsi e scrivere il file
+
+   Ora i `which` restituiscono tutti un valore:
+
+   ```bash
+   which lynis nmap chkrootkit rkhunter apt-get gpg tee cat tar
+   ```
+
+   Devi ottenere **nove righe**. Se un comando non compare, manca: torna alla fase A prima di proseguire, perché una riga sudoers con un percorso sbagliato non autorizza nulla e il relativo tool si fermerà a metà audit. (`tar` serve al backup, prerequisito 6: lo ricaviamo qui per non dover rifare il giro.)
 
    Poi crea il file (sostituendo ogni percorso con quello ottenuto sopra, ed `<utente>` con l'utente SSH usato):
 
@@ -210,7 +241,7 @@ Per liberare spazio, `restic forget` e `restic prune` sono comandi tuoi da dare 
    sudo -l -U <utente>
    ```
 
-6. **Regola sudo per il backup**, sempre sulla VM target. Il backup legge `/etc/sudoers.d`, che un utente non privilegiato non può leggere, quindi serve una riga dedicata. Verifica prima il percorso reale di `tar` sulla VM (`which tar`), poi aggiungi al file `/etc/sudoers.d/audit-scripts`:
+6. **Regola sudo per il backup**, sempre sulla VM target. Il backup legge `/etc/sudoers.d`, che un utente non privilegiato non può leggere, quindi serve una riga dedicata. Usa il percorso di `tar` già ricavato nella fase B, e aggiungi al file `/etc/sudoers.d/audit-scripts`:
 
    ```
    <utente> ALL=(root) NOPASSWD: <path-tar> -cf - --absolute-names --ignore-failed-read /etc/apt/sources.list.d /etc/sudoers.d /usr/share/keyrings/trivy.gpg
@@ -228,9 +259,21 @@ Per liberare spazio, `restic forget` e `restic prune` sono comandi tuoi da dare 
 
    > **Attenzione se aggiungi path extra al backup.** Ogni combinazione di path produce un comando `tar` diverso, che le righe sopra non matchano. Puoi aggiungere una riga per la combinazione esatta che ti serve, oppure usare una wildcard — ma sappi cosa stai concedendo: `NOPASSWD` su `tar` con argomenti liberi equivale, in pratica, a **lettura come root di tutto il filesystem** (e `tar` sa anche scrivere file). Preferisci righe esatte per i path che ti servono davvero.
 
+7. **Utente nel gruppo `docker` sulla VM, se sulla VM c'è Docker.** Serve solo alla scansione delle immagini: `run-tool.sh` esegue `docker images` **senza `sudo`** (per questo non c'è una riga sudoers che lo copra), quindi un utente fuori dal gruppo `docker` non riesce a interrogare il daemon.
+
+   La conseguenza è subdola e va conosciuta: il comando non produce un errore visibile, lo script scrive `NO_IMAGES: nessuna immagine Docker presente` e il report lo riporta come "nessuna immagine da scansionare". **Afferma cioè che immagini non ce ne sono, mentre magari ce ne sono.** Se sulla VM non hai Docker, non devi fare nulla: l'omissione viene annotata correttamente.
+
+   ```bash
+   sudo usermod -aG docker <utente>   # sulla VM target
+   # poi chiudi e riapri la sessione SSH: l'appartenenza al gruppo vale dal login successivo
+   id -nG <utente> | tr ' ' '\n' | grep -x docker   # deve stampare: docker
+   ```
+
+   > L'appartenenza al gruppo `docker` è, di fatto, **equivalente a root** su quella macchina: chi può parlare col daemon può montare l'intero filesystem dentro un container. Concedila consapevolmente, o accetta di non scansionare le immagini.
+
 ### Per la pipeline container
 
-7. **Podman su Hermes**. La pipeline container costruisce ed esegue l'immagine con Podman (non Docker). In WSL serve WSL2: su WSL1 Podman non funziona. Verifica con `podman info`.
+8. **Podman su Hermes**. La pipeline container costruisce ed esegue l'immagine con Podman (non Docker). In WSL serve WSL2: su WSL1 Podman non funziona. Verifica con `podman info`.
 
    Su WSL, Podman rootless segnala di solito che non c'è una sessione systemd utente e ripiega su `cgroupfs`: sono warning innocui e la build funziona comunque. Se però vuoi che l'audit possa partire anche da un contesto non interattivo (cron, gateway) senza che i processi vengano terminati alla chiusura della sessione di login, abilita il lingering una volta per sempre:
 
@@ -238,7 +281,7 @@ Per liberare spazio, `restic forget` e `restic prune` sono comandi tuoi da dare 
    loginctl enable-linger "$(id -u)"
    ```
 
-8. **Raggiungibilità di rete da Hermes al target**, sulle porte che vuoi analizzare (di default 22 e 443). Nessuna credenziale verso il target è necessaria.
+9. **Raggiungibilità di rete da Hermes al target**, sulle porte che vuoi analizzare (di default 22 e 443). Nessuna credenziale verso il target è necessaria.
 
 ## Installazione
 
@@ -246,7 +289,7 @@ Dall'ambiente dove usi Hermes (es. la tua WSL):
 
 ```bash
 mkdir -p ~/.hermes/skills/audit
-curl -fsSL "https://raw.githubusercontent.com/gabriele1701/Agentic-audit/v2.3.1/SKILL.md" -o ~/.hermes/skills/audit/SKILL.md
+curl -fsSL "https://raw.githubusercontent.com/gabriele1701/Agentic-audit/v2.4/SKILL.md" -o ~/.hermes/skills/audit/SKILL.md
 ```
 
 Non serve copiare nessuno script: la skill si occupa lei stessa di depositarli al primo utilizzo, sulla macchina giusta per ciascuno (vedi sotto).
@@ -300,10 +343,16 @@ Sia `SKILL.md` sia gli script sono pensati per essere adattati: puoi modificare 
 - Il wrapper `vm-exec.sh` apre **una connessione SSH per comando**: nessuna shell remota persistente tra un comando e l'altro. In pratica non è un problema (gli script sono autonomi e i percorsi sono assoluti), ma significa che un `export` o un `cd` non sopravvivono all'invocazione successiva.
 - `vm-exec.sh` legge `config.yaml` con un parser minimale che riconosce le quattro chiavi `ssh_*` dentro il blocco `terminal:`. Se la tua versione di Hermes tiene quei valori altrove (per esempio come variabili `TERMINAL_SSH_*` in `.env`), passali con `AUDIT_VM_HOST`, `AUDIT_VM_USER`, `AUDIT_VM_PORT`, `AUDIT_VM_KEY`.
 
+### Preparazione del target
+
+- **Il file sudoers si scrive a mano** (prerequisito 5): diciassette righe da comporre sostituendo i percorsi ricavati con `which`. È il passaggio più lungo e più facile da sbagliare dell'intera installazione. In roadmap c'è uno script di bootstrap (`setup/setup-target.sh`) che gira una volta sulla VM, installa i tool, ricava da solo i percorsi reali, genera il file completo, lo valida con `visudo -cf` su una copia temporanea e lo installa a `0440` solo se la validazione passa — un comando al posto della procedura manuale. Non è in questa release di proposito: uno script che scrive in `/etc/sudoers.d` va collaudato su macchine pulite prima di essere distribuito, e un sudoers malformato può chiudere fuori l'amministratore.
+
 ### Pipeline host
 
 - **debsecan** potrebbe non essere disponibile nei repository apt per alcune release non più supportate: in quel caso la skill lo segnala e chiede una deroga esplicita per saltarlo, senza bloccare necessariamente il resto dell'audit.
-- La scansione **Docker** con trivy viene eseguita solo se Docker è installato sulla macchina target; altrimenti viene annotata come omessa, non come errore.
+- **debsecan su Ubuntu produce un volume di output non utilizzabile**: su una Ubuntu 26.04 installata da venti minuti ha restituito 46.479 voci CVE, senza alcuna marcatura d'urgenza che permetta di ordinarle. È il tool fuori contesto — nasce per Debian, dove il tracker ha una semantica diversa — non lo stato della macchina. È in valutazione se renderlo opzionale o rimuoverlo dalla pipeline.
+- La scansione **Docker** con trivy viene eseguita solo se Docker è installato sulla macchina target; altrimenti viene annotata come omessa, non come errore. **Manca però la distinzione tra "nessuna immagine" e "Docker non interrogabile"**: entrambi i casi producono lo stesso marcatore `NO_IMAGES` (vedi prerequisito 7). In roadmap un terzo marcatore, perché il report possa dichiarare quel ramo come *non valutato* invece che come vuoto.
+- **rkhunter** è invocato con `--rwo`, che stampa solo i warning. Il `.raw` quindi non contiene la sintesi finale: dimostra cosa è stato trovato, ma non quali verifiche siano state eseguite. In roadmap la rimozione del flag, con l'aggiornamento della riga sudoers corrispondente.
 - Pensata e testata solo su target **Debian/Ubuntu**; altre distribuzioni richiederebbero adattare i comandi di installazione negli script.
 
 ### Pipeline container
@@ -311,6 +360,7 @@ Sia `SKILL.md` sia gli script sono pensati per essere adattati: puoi modificare 
 - A differenza di quella host, nella pipeline container **i tre tool girano sempre tutti**, anche se uno fallisce: è un singolo `podman run`, non c'è modo di fermarsi a metà e chiedere conferma. L'agente riporta gli exit code letteralmente e ti chiede come classificarli prima di scrivere il report.
 - Una **porta chiusa o non raggiungibile** è un risultato dell'audit, non un guasto. Se sul target 443 è chiusa, testssl e nuclei lo segnaleranno come errore di connessione: è corretto, e la skill è scritta perché l'agente non lo spacci da solo per un malfunzionamento.
 - I **template di nuclei** sono pinnati, quindi possono essere indietro rispetto agli ultimi CVE. Vedi la sezione sull'aggiornamento sopra.
+- **testssl** viene invocato in modo che produce marcatori testuali (`VULNERABLE`, `NOT ok`, `offered (deprecated)`) invece delle severità strutturate che il tool saprebbe emettere. La classificazione nel report è tarata su quei marcatori ed è collaudata, ma resta una mappatura su testo: è in valutazione il passaggio all'output strutturato, più solido a costo di `.raw` meno leggibili a occhio.
 
 ### Backup
 
@@ -322,7 +372,7 @@ Sia `SKILL.md` sia gli script sono pensati per essere adattati: puoi modificare 
 
 ## Ambiente di test
 
-- **Macchina target**: Ubuntu/Debian (VM su VMware Workstation)
+- **Macchine target**: due VM distinte su VMware Workstation, su due release di Ubuntu diverse, la seconda con SSH su porta non standard e utente dedicato — entrambe le pipeline sono state validate su entrambe
 - **Ambiente agente**: Hermes Agent (terminale), su WSL2, con `terminal.backend: local`
 - **Runtime container**: Podman (rootless)
 - **Modello**: DeepSeek V4 Flash 0731 (1m token di contesto)
@@ -336,7 +386,7 @@ I requisiti di contesto e i tempi misurati sulla v1.0 erano: minimo 90k token, r
 
 | Riferimento | Punta a |
 |---|---|
-| `SKILL.md` | tag `v2.3.1` |
+| `SKILL.md` | tag `v2.4` |
 | `helper/` (accesso alla VM) | commit `5d54bfb` |
 | `scripts/` (pipeline host) | commit `d4d3f52` |
 | `backup/` | commit `5d54bfb` |
